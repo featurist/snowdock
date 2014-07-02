@@ -4,7 +4,7 @@ _ = require 'underscore'
 module.exports (apiUrl: nil, proxy: nil, apiKey: nil, containerPort: 80) =
   idFromLocation (location) = urlUtils.parse (location).path
 
-  http = require './shipyardClient'.api (apiUrl, log: true, shipyard: {apiKey = apiKey})
+  http = require './shipyardClient'.api (apiUrl, shipyard: {apiKey = apiKey})
 
   {
     container (c) =
@@ -29,9 +29,27 @@ module.exports (apiUrl: nil, proxy: nil, apiKey: nil, containerPort: 80) =
       console.log "created container #(containerId)"
       containerId
 
+    applicationByName (name) =
+      [
+        app <- http.get 'applications/'!.body.objects
+        app.name == name
+        app
+      ].0
+
+    containers ()! =
+      http.get 'containers/'!.body
+
+    containersUsingImage (imageName) =
+      re = @new RegExp "^(.*/)?#(imageName)$"
+      [
+        container <- http.get 'containers/'!.body.objects
+        re.test (container.meta.Config.Image)
+        container
+      ]
+
     destroyContainer (containerId) =
       console.log "destroying #(containerId)"
-      http.get "#(containerId)destroy/"!
+      console.log(http.get "#(containerId)destroy/"!.body)
 
     application (app) =
       app := _.extend {
@@ -51,20 +69,13 @@ module.exports (apiUrl: nil, proxy: nil, apiKey: nil, containerPort: 80) =
 
         uri
 
-      applicationByName (name) =
-        [
-          app <- http.get 'applications/'!.body.objects
-          app.name == name
-          app
-        ].0
-
-      existingApplication = applicationByName (app.name)!
+      existingApplication = self.applicationByName (app.name)!
 
       if (existingApplication)
         console.log 'found existing app' (existingApplication)
         console.log 'updating app' (app)
         location = updateApplication (existingApplication.resource_uri, app)!
-        [container <- existingApplication.containers, self.destroyContainer (container.resource_uri)]
+        [container <- existingApplication.containers, self.destroyContainer (container.resource_uri)!]
         location
       else
         console.log 'creating app' (app)
@@ -88,4 +99,12 @@ module.exports (apiUrl: nil, proxy: nil, apiKey: nil, containerPort: 80) =
       http.post 'images/import/' {
         repo_name = repo
       }!
+
+    deleteApplication (name)! =
+      app = self.applicationByName (name)!
+      if (app)
+        http.delete (app.resource_uri)!
+
+    deleteContainersUsingImage (imageName)! =
+      [container <- self.containersUsingImage (imageName)!, self.destroyContainer (container.resource_uri)!]
   }
