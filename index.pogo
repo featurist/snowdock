@@ -1,8 +1,9 @@
 Docker = require 'dockerode'
 _ = require 'underscore'
+redis = require 'redis'
 
 connectToDocker(host) =
-  @new Docker(host: host.host, port: host.port)
+  @new Docker(host: 'http://' + host.host, port: host.port)
 
 container (name, host, docker) =
   {
@@ -15,6 +16,12 @@ container (name, host, docker) =
           nil
         else
           throw (e)
+
+    name = name
+
+    remove()! =
+      container = docker.getContainer(name)
+      container.remove {force = true} ^!
   }
 
 image (name, host, docker) =
@@ -39,6 +46,44 @@ image (name, host, docker) =
           nil
         else
           throw (e)
+
+    name = name
+  }
+
+hipache (redisHost) =
+  hipacheRedis = redis.createClient(redisHost.port, redisHost.host)
+  
+  frontendKey (hostname) = "frontend:#(hostname)"
+  backendKey (hostname) = "backend:#(hostname)"
+  frontendHost (h) = "http://#(h.host):#(h.port)"
+
+  {
+    addBackends(hosts, hostname: nil) =
+      hipacheRedis.on 'error' @{}
+
+      len = hipacheRedis.llen (frontendKey(hostname)) ^!
+      if (len == 0)
+        hipacheRedis.rpush(frontendKey(hostname), hostname, ^)!
+
+      [
+        h <- hosts
+        hipacheRedis.rpush(frontendKey(hostname), "http://#(h.host):#(h.port)", ^)!
+      ]
+
+    backendsByHostname(hostname) =
+      [h <- hipacheRedis.lrange (backendKey(hostname), 0, -1) ^!, JSON.parse(h)]
+
+    removeBackends(hosts, hostname: nil) =
+      [
+        h <- hosts
+        hipacheRedis.lrem (frontendKey(hostname), 0, frontendHost(h)) ^!
+      ]
+
+    setBackends(hosts, hostname: nil) =
+      [
+        h <- hosts
+        hipacheRedis.rpush(backendKey(hostname), JSON.stringify(h), ^)!
+      ]
   }
 
 exports.host (host) =
@@ -70,10 +115,29 @@ exports.host (host) =
       bindings
 
   {
-    runWebCluster! (containerConfig, nodes: 1) =
-      [
+    runWebCluster! (containerConfig, nodes: 1, hostname: nil) =
+      h = hipache(host.redis)
+
+      existingBackends = h.backendsByHostname(hostname)!
+
+      self.pullImage(containerConfig.image)!
+
+      backends = [
         i <- [1..nodes]
-        self.runContainer (containerConfig)!
+        container = self.runContainer (containerConfig)!
+        port = container.status()!.HostConfig.PortBindings."#(portBinding(containerConfig.ports.0).containerPort)/tcp".0.HostPort
+        {port = port, container = container.name, host = host.lbHost @or host.host}
+      ]
+
+      setTimeout ^ 2000!
+
+      h.addBackends! (backends, hostname: hostname)
+      h.removeBackends! (existingBackends, hostname: hostname)
+      h.setBackends! (backends, hostname: hostname)
+
+      [
+        b <- existingBackends
+        self.container(b.container).remove()!
       ]
 
     runContainer (containerConfig) =
@@ -83,10 +147,8 @@ exports.host (host) =
       }
 
       if (@not self.image(containerConfig.image).status()!)
-        console.log "no image: #(containerConfig.image), pulling"
         self.pullImage(containerConfig.image)!
 
-      console.log "creating container"
       container = docker.createContainer(createOptions, ^)!
 
       startOptions = {
@@ -111,14 +173,9 @@ exports.host (host) =
           if (e)
             error(e)
           else
-            console.log "pulling #(imageName)"
             stream.setEncoding 'utf-8'
 
-            stream.on 'data' @(data)
-              process.stdout.write '.'
-
             stream.on 'end'
-              process.stdout.write "\n"
               result()
 
             stream.resume()
@@ -136,12 +193,11 @@ exports.lb (host) =
       hipacheHost.status(hipacheName)!
 
     isRunning()! =
-      hipache = hipacheHost.status(hipacheName)!
-      if (hipache)
-        hipache.State.Running
+      h = hipacheHost.status(hipacheName)!
+      if (h)
+        h.State.Running
 
     run() =
-      installed = self.isInstalled()!
       if (@not self.isInstalled()!)
         hipacheHost.runContainer! {
           image = 'hipache'
@@ -150,18 +206,18 @@ exports.lb (host) =
         }
       else
         if (@not self.isRunning()!)
-          hipache = docker.getContainer(hipacheName)
-          hipache.start(^)!
+          h = docker.getContainer(hipacheName)
+          h.start(^)!
 
     stop() =
       if (self.isRunning()!)
-        hipache = docker.getContainer(hipacheName)
-        hipache.stop(^)!
+        h = docker.getContainer(hipacheName)
+        h.stop(^)!
 
     remove() =
       try
-        hipache = docker.getContainer(hipacheName)
-        hipache.remove {force = true} ^!
+        h = docker.getContainer(hipacheName)
+        h.remove {force = true} ^!
       catch (e)
         if (e.reason != 'no such container')
           throw (e)

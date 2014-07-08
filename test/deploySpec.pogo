@@ -12,19 +12,22 @@ Docker = require 'dockerode'
 sshForward = require 'ssh-forward'
 snowdock = require '../index'
 retry = require '../../../VCP.API/IMD.VCP.API/ui/common/retry'
+redis = require 'redis'
+require 'longjohn'
 
 describe 'deploy'
   dockerRegistryDomain = nil
   dockerHost = nil
   dockerPort = nil
   imageName = nil
+  vip = nil
+  shipyardHost = 'shipyard'
 
   beforeEach =>
     self.timeout 60000
 
     fs.writeFile 'nodeapp/views/index.txt' 'hi from <%= host %>'!
-    shipyardHost = 'shipyard'
-    vip = vagrantIp()!
+    vip := vagrantIp()!
     dockerRegistryDomain := "#(vip):5000"
     dockerHost := "http://#(vip)"
     dockerPort := 4243
@@ -35,8 +38,13 @@ describe 'deploy'
     snowdockLb = nil
 
     beforeEach
-      snowdockHost := snowdock.host(host: 'http://snowdock', port: 4243)
-      snowdockLb := snowdock.lb(host: 'http://snowdock', port: 4243)
+      snowdockHost := snowdock.host(
+        host: 'snowdock'
+        port: 4243
+        lbHost: vip
+        redis: {port = 6379, host = 'snowdock'}
+      )
+      snowdockLb := snowdock.lb(host: 'snowdock', port: 4243)
 
     describe 'web clusters'
       beforeEach =>
@@ -47,22 +55,53 @@ describe 'deploy'
         removeAllContainers(imageName: imageName)!
         snowdockHost.removeImage(imageName)!
 
+        retry(timeout: 2000)!
+          hipacheRedis = redis.createClient(6379, 'snowdock')
+          hipacheRedis.on 'error' @{}
+          hipacheRedis.flushdb(^)!
+
       removeAllContainers(imageName: nil) =
         docker = @new Docker(host: dockerHost, port: dockerPort)
         [
           c <- docker.listContainers ^!
-          r/^(.*):/.exec(c.Image).1 == imageName
+          @{
+            new (RegExp "^#(imageName):?").test(c.Image)
+          }()
           cont = docker.getContainer (c.Id)
           cont.remove {force = true} ^!
         ]
-      
+
       it 'can create a web cluster' =>
         self.timeout (5 * 60 * 1000)
-        port = 80
-        containers = snowdockHost.runWebCluster {image = imageName, ports = ["#(port)"]} (nodes: 2)!
-        console.log (containers)
-      
-      xit 'run container' =>
+
+        snowdockHost.runWebCluster {
+          image = imageName
+          ports = ["80"]
+        } (nodes: 2, hostname: 'nodeapp')!
+
+        waitFor 2 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+
+      it 'can create and update a web cluster' =>
+        self.timeout (5 * 60 * 1000)
+
+        snowdockHost.runWebCluster {
+          image = imageName
+          ports = ["80"]
+        } (nodes: 2, hostname: 'nodeapp')!
+
+        waitFor 2 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+
+        makeChangeToApp()!
+        buildDockerImage (imageName: imageName, dir: 'nodeapp')!
+
+        snowdockHost.runWebCluster {
+          image = imageName
+          ports = ["80"]
+        } (nodes: 2, hostname: 'nodeapp')!
+
+        waitFor 2 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*), v2$/)!
+
+      it 'run container' =>
         self.timeout (5 * 60 * 1000)
         container = snowdockHost.runContainer {image = imageName}!
         container.status()!.State.Running.should.equal (true)
@@ -204,8 +243,8 @@ describe 'deploy'
 
   buildDockerImage (imageName: nil, dir: nil) =
     process.chdir "#(__dirname)/.."
-    console.log(child_process.exec "docker build -t #(imageName) #(dir)" ^!)
-    console.log(child_process.exec "docker push #(imageName)" ^!)
+    child_process.exec "docker build -t #(imageName) #(dir)" ^!
+    child_process.exec "docker push #(imageName)" ^!
 
   dockerSSH(block)! =
     sshForward! {
@@ -217,29 +256,21 @@ describe 'deploy'
       block(host: 'http://localhost', port: port)!
 
   pullImage (imageName)! =
-    console.log 'pulling image'
     // dockerSSH! @(host: nil, port: nil)
     host = 'http://localhost'
     port = 4243
-    console.log 'have ssh port' (port)
     promise! @(result, error)
       docker = @new Docker(host: host, port: port)
       docker.pull (imageName) @(e, stream)
-        console.log 'pulling' (e)
         if (e)
           error(e)
         else
           stream.setEncoding 'utf-8'
 
-          stream.on 'data' @(data)
-            console.log '.'
-
           stream.on 'end'
             result()
 
           stream.resume()
-
-    console.log 'finished'
 
   waitFor (n) backendsToRespond (host: nil, responseRegex: nil, timeout: 5000)! =
     promise @(result, error)
@@ -247,7 +278,7 @@ describe 'deploy'
         error(@new Error "failed to get reponses from all #(n) hosts")
       (timeout)
 
-      nodeapp = httpism.api 'http://rhel/' (headers: {host = host})
+      nodeapp = httpism.api 'http://snowdock/' (headers: {host = host})
 
       requestAHost(hosts) =
         body = nodeapp.get ''!.body
