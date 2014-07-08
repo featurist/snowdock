@@ -1,4 +1,4 @@
 shipyardApiKey = require './shipyardApiKey'
 
-task 'apikey'
-  console.log(shipyardApiKey()!)
+task 'apikey' @(args, host: 'localhost')
+  console.log(shipyardApiKey(host: host)!)

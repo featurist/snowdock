@@ -1,7 +1,7 @@
 httpism = require 'httpism'
 
-module.exports () =
-  response = httpism.post 'http://localhost:8000/api/login' {
+module.exports (host: 'localhost') =
+  response = httpism.post "http://#(host):8000/api/login" {
     username = 'admin'
     password = 'shipyard'
   } (form: true)!

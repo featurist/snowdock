@@ -12,6 +12,9 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # Every Vagrant virtual environment requires a box to build off of.
   config.vm.box = 'phusion/ubuntu-14.04-amd64'
 
+  config.vm.provision :file, source: '~/.ssh/id_rsa.pub', destination: 'host_id_rsa.pub'
+  config.vm.provision :shell, inline: 'grep -q "$(cat host_id_rsa.pub)" ~vagrant/.ssh/authorized_keys || cat host_id_rsa.pub >> ~vagrant/.ssh/authorized_keys'
+
   config.vm.provision "docker" do |d|
     d.run "shipyard/redis", args: '-t -d -p 6379:6379 --name shipyard_redis'
     d.run "shipyard/router", args: '-t -d -p 80 --link shipyard_redis:redis --name shipyard_router'
