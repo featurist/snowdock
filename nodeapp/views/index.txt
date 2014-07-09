@@ -1,1 +1,1 @@
-hi from <%= host %>
+hi from <%= host %>, v3

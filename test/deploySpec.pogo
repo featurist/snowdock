@@ -71,7 +71,7 @@ describe 'deploy'
         cont.remove {force = true} ^!
       ]
 
-    describe.only 'configuration'
+    describe 'configuration'
       config = nil
 
       beforeEach =>
@@ -123,7 +123,7 @@ describe 'deploy'
         hipacheRedis.on 'error' @{}
         hipacheRedis.info(^).should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
 
-      it 'installs hipache' =>
+      it 'installs and runs load balancer' =>
         self.timeout (5 mins)
         snowdock.cluster(config).install()!
         shouldBeRunning()!
@@ -146,23 +146,35 @@ describe 'deploy'
           cluster.deployWebsites()!
           waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
 
-        it 'can update a web cluster from configuration' =>
-          self.timeout (5 mins)
+        context 'with no service interruption'
+          monitor = nil
 
-          cluster.deployWebsites()!
-          waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+          beforeEach
+            monitor := serviceMonitor(host: 'snowdock', hostname: 'nodeapp')
 
-          makeChangeToApp('v2')!
-          buildDockerImage (imageName: imageName, dir: 'nodeapp')!
+          afterEach
+            monitor.stop()
 
-          cluster.deployWebsites()!
-          waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*), v2$/)!
+            monitor.totalInterruptionTime.should.equal 0
+            should.not.exist(monitor.error)
 
-          makeChangeToApp('v3')!
-          buildDockerImage (imageName: imageName, dir: 'nodeapp')!
+          it 'can update a web cluster from configuration' =>
+            self.timeout (5 mins)
 
-          cluster.deployWebsites()!
-          waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*), v3$/)!
+            cluster.deployWebsites()!
+            waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+
+            makeChangeToApp('v2')!
+            buildDockerImage (imageName: imageName, dir: 'nodeapp')!
+
+            cluster.deployWebsites()!
+            waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*), v2$/)!
+
+            makeChangeToApp('v3')!
+            buildDockerImage (imageName: imageName, dir: 'nodeapp')!
+
+            cluster.deployWebsites()!
+            waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*), v3$/)!
 
         it 'can stop the load balancer and start it again' =>
           self.timeout (5 * 60 * 1000)
@@ -186,181 +198,14 @@ describe 'deploy'
           findContainers(command: 'node_modules/.bin/pogo index.pogo')!.should.eql []
           findContainers(imageName: 'hipache')!.should.eql []
 
-    describe 'web clusters'
-      beforeEach =>
-        self.timeout (5 mins)
-        snowdockLb.uninstall()!
-        snowdockLb.install()!
-
-        removeAllContainers(command: 'node_modules/.bin/pogo index.pogo')!
-        snowdockHost.removeImage(imageName)!
-
-        retry(timeout: 2000)!
-          hipacheRedis = redis.createClient(6379, 'snowdock')
-          hipacheRedis.on 'error' @{}
-          hipacheRedis.flushdb(^)!
-
-      it 'can create a web cluster' =>
-        self.timeout (5 * 60 * 1000)
-
-        snowdockHost.deployWebsite! {
-          container = {
-            image = imageName
-            ports = ["80"]
-          }
-          nodes = 2
-          hostname = 'nodeapp'
-        }
-
-        waitFor 2 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
-
-      it 'can create and update a web cluster' =>
-        self.timeout (5 * 60 * 1000)
-
-        snowdockHost.deployWebsite! {
-          container = {
-            image = imageName
-            ports = ["80"]
-          }
-          nodes = 2
-          hostname = 'nodeapp'
-        }
-
-        waitFor 2 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
-
-        makeChangeToApp('v2')!
-        buildDockerImage (imageName: imageName, dir: 'nodeapp')!
-
-        snowdockHost.deployWebsite! {
-          container = {
-            image = imageName
-            ports = ["80"]
-          }
-          nodes = 2
-          hostname = 'nodeapp'
-        }
-
-        waitFor 2 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*), v2$/)!
-
-      it 'run container' =>
-        self.timeout (5 * 60 * 1000)
-        container = snowdockHost.runContainer {image = imageName}!
-        container.status()!.State.Running.should.equal (true)
-
-    describe 'load balancer'
-      beforeEach =>
-        self.timeout (5 * 60 * 1000)
-        snowdockLb.uninstall()!
-
-      shouldBeRunning()! =
-        retry(timeout: 10000)!
-          response = httpism.get 'http://snowdock/' (exceptions: false)!
-          response.statusCode.should.equal 400
-          response.body.should.match r/no application configured/i
-
-      shouldNotBeRunning()! =
-        httpism.get 'http://snowdock/' (exceptions: false).should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
-
-      it "doesn't have the load balancer running"
-        shouldNotBeRunning()!
-
-      it 'installs hipache' =>
-        self.timeout (5 * 60 * 1000)
-
-        snowdockLb.install()!
-        shouldBeRunning()!
-
-      context 'given that it is installed'
-        beforeEach =>
-          self.timeout (5 * 60 * 1000)
-          snowdockLb.install()!
-
-        it 'can stop it and start it again' =>
-          self.timeout (5 * 60 * 1000)
-          snowdockLb.stop()!
-          shouldNotBeRunning()!
-
-          snowdockLb.install()!
-          shouldBeRunning()!
-
-  context 'given a built image'
-    shipyard = nil
-    apikey = nil
-
-    beforeEach =>
-      apikey := shipyardApiKey(host: shipyardHost)!
-
-      shipyard := connectToShipyard {
-        apiUrl = "http://#(shipyardHost):8000/api/v1/"
-        apiKey = "admin:#(apikey)"
-      }
-
-      shipyard.deleteApplication 'nodeapp'!
-      shipyard.deleteContainersUsingImage 'nodeapp'!
-
-      self.timeout 60000
-      buildDockerImage (imageName: imageName, dir: 'nodeapp')!
-      pullImage (imageName)!
-
-    it 'should not have anything running'
-      shipyard.containersUsingImage 'nodeapp'!.length.should.eql 0
-      should.not.exist(shipyard.applicationByName 'nodeapp'!)
-
-    it 'can deploy an app' =>
-      self.timeout 60000
-
-      shipyard.application! {
-        domain_name = 'nodeapp'
-        containers = shipyard.4 containersFromImage (imageName)!
-      }
-
-      waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
-
-    describe 'updates'
-      monitor = nil
-
-      beforeEach
-        monitor := serviceMonitor(host: 'nodeapp')
-
-      afterEach
-        monitor.stop()
-
-      it 'can deploy an update to the app' =>
-        self.timeout 60000
-
-        shipyard.application! {
-          domain_name = 'nodeapp'
-          containers = shipyard.4 containersFromImage (imageName)!
-        }
-
-        waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
-
-        monitor.start()
-
-        makeChangeToApp('v2')!
-        buildDockerImage (imageName: imageName, dir: 'nodeapp')!
-        pullImage (imageName)!
-
-        shipyard.application! {
-          domain_name = 'nodeapp'
-          containers = shipyard.4 containersFromImage (imageName)!
-        }
-
-        waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*), v2$/)!
-
-        monitor.stop()
-
-        monitor.totalInterruptionTime.should.equal 0
-        should.not.exist(monitor.error)
-
-  serviceMonitor(host: nil) =
+  serviceMonitor(host: nil, hostname: nil) =
     interval = nil
     timeOfLastError = nil
 
     {
       start () =
         setInterval
-          response = httpism.get "http://#(shipyardHost)/" (headers: {host = host}, exceptions: false)!
+          response = httpism.get "http://#(host)/" (headers: {host = hostname}, exceptions: false)!
           if (response.statusCode >= 400)
             thisTime = @new Date().getTime()
             if (timeOfLastError)
