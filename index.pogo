@@ -119,11 +119,17 @@ exports.host (host) =
     else
       @throw @new Error "expected port binding to be \"[[host-ip:]host-port:]container-port\", but got #(port)"
 
+  (s) toArray =
+    if (s :: Array)
+      s
+    else
+      [s]
+
   portBindings (ports, create: false) =
     if (ports)
       bindings = {}
 
-      for each @(port) in (ports)
+      for each @(port) in ((ports) toArray)
         binding = portBinding(port)
         bindings."#(binding.containerPort)/tcp" =
           if (create)
@@ -144,7 +150,7 @@ exports.host (host) =
       backends = [
         i <- [1..websiteConfig.nodes]
         container = self.runContainer (websiteConfig.container)!
-        port = container.status()!.HostConfig.PortBindings."#(portBinding(websiteConfig.container.ports.0).containerPort)/tcp".0.HostPort
+        port = container.status()!.HostConfig.PortBindings."#(portBinding(websiteConfig.container.publish.0).containerPort)/tcp".0.HostPort
         {port = port, container = container.name, host = host.internalIp}
       ]
 
@@ -186,7 +192,7 @@ exports.host (host) =
       container = docker.createContainer(createOptions, ^)!
 
       startOptions = {
-        PortBindings = portBindings(containerConfig.ports)
+        PortBindings = portBindings(containerConfig.publish)
         NetworkMode = containerConfig.net
       }
 
@@ -239,7 +245,7 @@ loadBalancer (host, docker, redisDb) =
         host.runContainer! {
           image = 'hipache'
           name = hipacheName
-          ports = ['80:80', '6379:6379']
+          publish = ['80:80', '6379:6379']
         }
       else
         if (@not self.isRunning()!)

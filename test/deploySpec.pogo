@@ -58,7 +58,7 @@ describe 'snowdock'
           hostname  = 'nodeapp'
           container = {
             image = imageName
-            ports = ["80"]
+            publish = ["80"]
           }
         }
       ]
