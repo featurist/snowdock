@@ -3,7 +3,10 @@ _ = require 'underscore'
 redis = require 'redis'
 
 connectToDocker(host) =
-  @new Docker(host: 'http://' + host.host, port: host.port)
+  @new Docker(host: 'http://' + host.docker.host, port: host.docker.port)
+
+connectToRedis(host) =
+  redis.createClient(host.redis.port, host.redis.host)
 
 container (name, host, docker) =
   {
@@ -50,44 +53,25 @@ image (name, host, docker) =
     name = name
   }
 
-hipache (redisHost) =
-  hipacheRedis = redis.createClient(redisHost.port, redisHost.host)
-  
-  frontendKey (hostname) = "frontend:#(hostname)"
-  backendKey (hostname) = "backend:#(hostname)"
-  frontendHost (h) = "http://#(h.host):#(h.port)"
-
-  {
-    addBackends(hosts, hostname: nil) =
-      hipacheRedis.on 'error' @{}
-
-      len = hipacheRedis.llen (frontendKey(hostname)) ^!
-      if (len == 0)
-        hipacheRedis.rpush(frontendKey(hostname), hostname, ^)!
-
-      [
-        h <- hosts
-        hipacheRedis.rpush(frontendKey(hostname), "http://#(h.host):#(h.port)", ^)!
-      ]
-
-    backendsByHostname(hostname) =
-      [h <- hipacheRedis.lrange (backendKey(hostname), 0, -1) ^!, JSON.parse(h)]
-
-    removeBackends(hosts, hostname: nil) =
-      [
-        h <- hosts
-        hipacheRedis.lrem (frontendKey(hostname), 0, frontendHost(h)) ^!
-      ]
-
-    setBackends(hosts, hostname: nil) =
-      [
-        h <- hosts
-        hipacheRedis.rpush(backendKey(hostname), JSON.stringify(h), ^)!
-      ]
-  }
+exports.cluster (config) = {
+  deploy()! =
+    [
+      hostConfig <- config.hosts
+      host = exports.host(hostConfig)
+      websiteConfig <- config.websites
+      host.runWebCluster! (websiteConfig)
+    ]
+}
 
 exports.host (host) =
   docker = connectToDocker(host)
+  redisDb =
+    client = nil
+    @()
+      if (client)
+        client
+      else
+        client := connectToRedis(host)
 
   portBinding (port) =
     match = r/((([0-9.]*):)?(\d+):)?(\d+)/.exec(port)
@@ -115,30 +99,32 @@ exports.host (host) =
       bindings
 
   {
-    runWebCluster! (containerConfig, nodes: 1, hostname: nil) =
-      h = hipache(host.redis)
+    runWebCluster! (websiteConfig) =
+      lb = self.loadBalancer()
 
-      existingBackends = h.backendsByHostname(hostname)!
+      existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
 
-      self.pullImage(containerConfig.image)!
+      self.pullImage(websiteConfig.container.image)!
 
       backends = [
-        i <- [1..nodes]
-        container = self.runContainer (containerConfig)!
-        port = container.status()!.HostConfig.PortBindings."#(portBinding(containerConfig.ports.0).containerPort)/tcp".0.HostPort
-        {port = port, container = container.name, host = host.lbHost @or host.host}
+        i <- [1..websiteConfig.nodes]
+        container = self.runContainer (websiteConfig.container)!
+        port = container.status()!.HostConfig.PortBindings."#(portBinding(websiteConfig.container.ports.0).containerPort)/tcp".0.HostPort
+        {port = port, container = container.name, host = host.internalIp}
       ]
 
       setTimeout ^ 2000!
 
-      h.addBackends! (backends, hostname: hostname)
-      h.removeBackends! (existingBackends, hostname: hostname)
-      h.setBackends! (backends, hostname: hostname)
+      lb.addBackends! (backends, hostname: websiteConfig.hostname)
+      lb.removeBackends! (existingBackends, hostname: websiteConfig.hostname)
+      lb.setBackends! (backends, hostname: websiteConfig.hostname)
 
       [
         b <- existingBackends
         self.container(b.container).remove()!
       ]
+
+    loadBalancer() = loadBalancer(self, docker, redisDb)
 
     runContainer (containerConfig) =
       createOptions = {
@@ -153,6 +139,7 @@ exports.host (host) =
 
       startOptions = {
         PortBindings = portBindings(containerConfig.ports)
+        NetworkMode = containerConfig.net
       }
 
       container.start (startOptions, ^)!
@@ -183,26 +170,29 @@ exports.host (host) =
       self.image(imageName)
   }
 
-exports.lb (host) =
-  docker = connectToDocker(host)
+loadBalancer (host, docker, redisDb) =
   hipacheName = 'snowdock-hipache'
-  hipacheHost = exports.host(host)
+
+  frontendKey (hostname) = "frontend:#(hostname)"
+  backendKey (hostname) = "backend:#(hostname)"
+  frontendHost (h) = "http://#(h.host):#(h.port)"
 
   {
     isInstalled()! =
-      hipacheHost.status(hipacheName)!
+      host.status(hipacheName)!
 
     isRunning()! =
-      h = hipacheHost.status(hipacheName)!
+      h = host.status(hipacheName)!
       if (h)
         h.State.Running
 
     run() =
       if (@not self.isInstalled()!)
-        hipacheHost.runContainer! {
+        host.runContainer! {
           image = 'hipache'
           name = hipacheName
           ports = ['80:80', '6379:6379']
+          net = 'host'
         }
       else
         if (@not self.isRunning()!)
@@ -221,4 +211,31 @@ exports.lb (host) =
       catch (e)
         if (e.reason != 'no such container')
           throw (e)
+
+    addBackends(hosts, hostname: nil) =
+      redisDb().on 'error' @{}
+
+      len = redisDb().llen (frontendKey(hostname)) ^!
+      if (len == 0)
+        redisDb().rpush(frontendKey(hostname), hostname, ^)!
+
+      [
+        h <- hosts
+        redisDb().rpush(frontendKey(hostname), "http://#(h.host):#(h.port)", ^)!
+      ]
+
+    backendsByHostname(hostname) =
+      [h <- redisDb().lrange (backendKey(hostname), 0, -1) ^!, JSON.parse(h)]
+
+    removeBackends(hosts, hostname: nil) =
+      [
+        h <- hosts
+        redisDb().lrem (frontendKey(hostname), 0, frontendHost(h)) ^!
+      ]
+
+    setBackends(hosts, hostname: nil) =
+      [
+        h <- hosts
+        redisDb().rpush(backendKey(hostname), JSON.stringify(h), ^)!
+      ]
   }

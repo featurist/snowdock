@@ -14,6 +14,7 @@ snowdock = require '../index'
 retry = require '../../../VCP.API/IMD.VCP.API/ui/common/retry'
 redis = require 'redis'
 require 'longjohn'
+waitForSocket = require 'waitforsocket'
 
 describe 'deploy'
   dockerRegistryDomain = nil
@@ -22,6 +23,7 @@ describe 'deploy'
   imageName = nil
   vip = nil
   shipyardHost = 'shipyard'
+  min = (n) mins = n * 60 * 1000
 
   beforeEach =>
     self.timeout 60000
@@ -38,21 +40,82 @@ describe 'deploy'
     snowdockLb = nil
 
     beforeEach
-      snowdockHost := snowdock.host(
-        host: 'snowdock'
-        port: 4243
-        lbHost: vip
-        redis: {port = 6379, host = 'snowdock'}
-      )
-      snowdockLb := snowdock.lb(host: 'snowdock', port: 4243)
+      snowdockHost := snowdock.host {
+        docker = {
+          host = 'snowdock'
+          port = 4243
+        }
+        redis = {
+          port = 6379
+          host = 'snowdock'
+        }
+        internalIp = "172.17.42.1"
+      }
+      snowdockLb := snowdockHost.loadBalancer()
 
-    describe 'web clusters'
+    removeAllContainers(imageName: nil, command: nil) =
+      docker = @new Docker(host: dockerHost, port: dockerPort)
+      [
+        c <- docker.listContainers ^!
+        if (imageName)
+          new (RegExp "^#(imageName):?").test(c.Image)
+        else if (command)
+          c.Command == command
+
+        cont = docker.getContainer (c.Id)
+        cont.remove {force = true} ^!
+      ]
+
+    describe 'configuration'
       beforeEach =>
-        self.timeout (5 * 60 * 1000)
+        self.timeout (5 mins)
         snowdockLb.remove()!
         snowdockLb.run()!
 
-        removeAllContainers(imageName: imageName)!
+        removeAllContainers(command: 'node_modules/.bin/pogo index.pogo')!
+        snowdockHost.removeImage(imageName)!
+
+        waitForSocket('snowdock', 6379, timeout: 2000)!
+
+      it 'can create a web cluster from configuration' =>
+        self.timeout (5 mins)
+
+        config = {
+          hosts = [
+            {
+              docker = {
+                host = "snowdock"
+                port = 4243
+              }
+              redis = {
+                host = "snowdock"
+                port = 6379
+              }
+              internalIp = "172.17.42.1"
+            }
+          ]
+          websites = [
+            {
+              nodes = 4
+              hostname  = 'nodeapp'
+              container = {
+                image = imageName
+                ports = ["80"]
+              }
+            }
+          ]
+        }
+
+        snowdock.cluster(config).deploy()!
+        waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+
+    describe 'web clusters'
+      beforeEach =>
+        self.timeout (5 mins)
+        snowdockLb.remove()!
+        snowdockLb.run()!
+
+        removeAllContainers(command: 'node_modules/.bin/pogo index.pogo')!
         snowdockHost.removeImage(imageName)!
 
         retry(timeout: 2000)!
@@ -60,44 +123,45 @@ describe 'deploy'
           hipacheRedis.on 'error' @{}
           hipacheRedis.flushdb(^)!
 
-      removeAllContainers(imageName: nil) =
-        docker = @new Docker(host: dockerHost, port: dockerPort)
-        [
-          c <- docker.listContainers ^!
-          @{
-            new (RegExp "^#(imageName):?").test(c.Image)
-          }()
-          cont = docker.getContainer (c.Id)
-          cont.remove {force = true} ^!
-        ]
-
       it 'can create a web cluster' =>
         self.timeout (5 * 60 * 1000)
 
-        snowdockHost.runWebCluster {
-          image = imageName
-          ports = ["80"]
-        } (nodes: 2, hostname: 'nodeapp')!
+        snowdockHost.runWebCluster! {
+          container = {
+            image = imageName
+            ports = ["80"]
+          }
+          nodes = 2
+          hostname = 'nodeapp'
+        }
 
         waitFor 2 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
 
       it 'can create and update a web cluster' =>
         self.timeout (5 * 60 * 1000)
 
-        snowdockHost.runWebCluster {
-          image = imageName
-          ports = ["80"]
-        } (nodes: 2, hostname: 'nodeapp')!
+        snowdockHost.runWebCluster! {
+          container = {
+            image = imageName
+            ports = ["80"]
+          }
+          nodes = 2
+          hostname = 'nodeapp'
+        }
 
         waitFor 2 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
 
         makeChangeToApp()!
         buildDockerImage (imageName: imageName, dir: 'nodeapp')!
 
-        snowdockHost.runWebCluster {
-          image = imageName
-          ports = ["80"]
-        } (nodes: 2, hostname: 'nodeapp')!
+        snowdockHost.runWebCluster! {
+          container = {
+            image = imageName
+            ports = ["80"]
+          }
+          nodes = 2
+          hostname = 'nodeapp'
+        }
 
         waitFor 2 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*), v2$/)!
 
