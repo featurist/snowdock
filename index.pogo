@@ -53,15 +53,48 @@ image (name, host, docker) =
     name = name
   }
 
-exports.cluster (config) = {
-  deploy()! =
+exports.cluster (config) =
+  withLoadBalancers (block) =
     [
       hostConfig <- config.hosts
-      host = exports.host(hostConfig)
-      websiteConfig <- config.websites
-      host.runWebCluster! (websiteConfig)
+      lb = exports.host(hostConfig).loadBalancer()
+      block(lb)!
     ]
-}
+    
+  {
+    deployWebsites()! =
+      [
+        hostConfig <- config.hosts
+        host = exports.host(hostConfig)
+        websiteConfig <- config.websites
+        host.deployWebsite! (websiteConfig)
+      ]
+
+    removeWebsites()! =
+      [
+        hostConfig <- config.hosts
+        host = exports.host(hostConfig)
+        websiteConfig <- config.websites
+        host.removeWebsite! (websiteConfig.hostname)
+      ]
+
+    install()! =
+      withLoadBalancers @(lb)
+        lb.install()!
+
+    uninstall()! =
+      self.removeWebsites()!
+      withLoadBalancers @(lb)
+        lb.uninstall()!
+
+    start()! =
+      withLoadBalancers @(lb)
+        lb.start()!
+
+    stop()! =
+      withLoadBalancers @(lb)
+        lb.stop()!
+  }
 
 exports.host (host) =
   docker = connectToDocker(host)
@@ -72,6 +105,8 @@ exports.host (host) =
         client
       else
         client := connectToRedis(host)
+        client.on 'error' @{}
+        client
 
   portBinding (port) =
     match = r/((([0-9.]*):)?(\d+):)?(\d+)/.exec(port)
@@ -99,7 +134,7 @@ exports.host (host) =
       bindings
 
   {
-    runWebCluster! (websiteConfig) =
+    deployWebsite! (websiteConfig) =
       lb = self.loadBalancer()
 
       existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
@@ -124,6 +159,19 @@ exports.host (host) =
         self.container(b.container).remove()!
       ]
 
+    removeWebsite! (hostname) =
+      lb = self.loadBalancer()
+
+      existingBackends = lb.backendsByHostname(hostname)!
+
+      lb.removeBackends! (existingBackends, hostname: hostname)
+      lb.setBackends! ([], hostname: hostname)
+
+      [
+        b <- existingBackends
+        self.container(b.container).remove()!
+      ]
+      
     loadBalancer() = loadBalancer(self, docker, redisDb)
 
     runContainer (containerConfig) =
@@ -186,14 +234,21 @@ loadBalancer (host, docker, redisDb) =
       if (h)
         h.State.Running
 
-    run() =
+    install() =
       if (@not self.isInstalled()!)
         host.runContainer! {
           image = 'hipache'
           name = hipacheName
           ports = ['80:80', '6379:6379']
-          net = 'host'
         }
+      else
+        if (@not self.isRunning()!)
+          h = docker.getContainer(hipacheName)
+          h.start(^)!
+
+    start() =
+      if (@not self.isInstalled()!)
+        throw (new (Error "not installed"))
       else
         if (@not self.isRunning()!)
           h = docker.getContainer(hipacheName)
@@ -204,7 +259,13 @@ loadBalancer (host, docker, redisDb) =
         h = docker.getContainer(hipacheName)
         h.stop(^)!
 
-    remove() =
+    uninstall() =
+      [
+        key <- redisDb().keys(backendKey '*', ^)!
+        hostname = key.split ':'.1
+        host.removeWebsite(hostname)!
+      ]
+
       try
         h = docker.getContainer(hipacheName)
         h.remove {force = true} ^!
@@ -213,8 +274,6 @@ loadBalancer (host, docker, redisDb) =
           throw (e)
 
     addBackends(hosts, hostname: nil) =
-      redisDb().on 'error' @{}
-
       len = redisDb().llen (frontendKey(hostname)) ^!
       if (len == 0)
         redisDb().rpush(frontendKey(hostname), hostname, ^)!
@@ -234,6 +293,7 @@ loadBalancer (host, docker, redisDb) =
       ]
 
     setBackends(hosts, hostname: nil) =
+      redisDb().del(backendKey(hostname), ^)!
       [
         h <- hosts
         redisDb().rpush(backendKey(hostname), JSON.stringify(h), ^)!

@@ -35,7 +35,7 @@ describe 'deploy'
     dockerPort := 4243
     imageName := "#(dockerRegistryDomain)/nodeapp"
 
-  describe.only 'snowdock'
+  describe 'snowdock'
     snowdockHost = nil
     snowdockLb = nil
 
@@ -53,7 +53,7 @@ describe 'deploy'
       }
       snowdockLb := snowdockHost.loadBalancer()
 
-    removeAllContainers(imageName: nil, command: nil) =
+    findContainers(imageName: nil, command: nil) =
       docker = @new Docker(host: dockerHost, port: dockerPort)
       [
         c <- docker.listContainers ^!
@@ -63,24 +63,24 @@ describe 'deploy'
           c.Command == command
 
         cont = docker.getContainer (c.Id)
+      ]
+
+    removeAllContainers(opts) =
+      [
+        cont <- findContainers(opts)!
         cont.remove {force = true} ^!
       ]
 
-    describe 'configuration'
+    describe.only 'configuration'
+      config = nil
+
       beforeEach =>
         self.timeout (5 mins)
-        snowdockLb.remove()!
-        snowdockLb.run()!
-
         removeAllContainers(command: 'node_modules/.bin/pogo index.pogo')!
+        removeAllContainers(imageName: 'hipache')!
         snowdockHost.removeImage(imageName)!
 
-        waitForSocket('snowdock', 6379, timeout: 2000)!
-
-      it 'can create a web cluster from configuration' =>
-        self.timeout (5 mins)
-
-        config = {
+        config := {
           hosts = [
             {
               docker = {
@@ -106,14 +106,91 @@ describe 'deploy'
           ]
         }
 
-        snowdock.cluster(config).deploy()!
-        waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+      shouldBeRunning()! =
+        retry(timeout: 10000)!
+          response = httpism.get 'http://snowdock/' (exceptions: false)!
+          response.statusCode.should.equal 400
+          response.body.should.match r/no application configured/i
+
+        retry(timeout: 2000)!
+          hipacheRedis = redis.createClient(6379, 'snowdock')
+          hipacheRedis.on 'error' @{}
+          hipacheRedis.info(^)!
+
+      shouldNotBeRunning()! =
+        httpism.get 'http://snowdock/' (exceptions: false).should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
+        hipacheRedis = redis.createClient(6379, 'snowdock')
+        hipacheRedis.on 'error' @{}
+        hipacheRedis.info(^).should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
+
+      it 'installs hipache' =>
+        self.timeout (5 mins)
+        snowdock.cluster(config).install()!
+        shouldBeRunning()!
+
+      it "doesn't have the load balancer running"
+        shouldNotBeRunning()!
+
+      context 'when it is installed'
+        cluster = nil
+
+        beforeEach =>
+          self.timeout (5 mins)
+          cluster := snowdock.cluster(config)
+          cluster.install()!
+          waitForSocket('snowdock', 6379, timeout: 2000)!
+
+        it 'can create a web cluster from configuration' =>
+          self.timeout (5 mins)
+
+          cluster.deployWebsites()!
+          waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+
+        it 'can update a web cluster from configuration' =>
+          self.timeout (5 mins)
+
+          cluster.deployWebsites()!
+          waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+
+          makeChangeToApp('v2')!
+          buildDockerImage (imageName: imageName, dir: 'nodeapp')!
+
+          cluster.deployWebsites()!
+          waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*), v2$/)!
+
+          makeChangeToApp('v3')!
+          buildDockerImage (imageName: imageName, dir: 'nodeapp')!
+
+          cluster.deployWebsites()!
+          waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*), v3$/)!
+
+        it 'can stop the load balancer and start it again' =>
+          self.timeout (5 * 60 * 1000)
+          cluster.stop()!
+          shouldNotBeRunning()!
+
+          cluster.start()!
+          shouldBeRunning()!
+
+        it 'uninstalls the load balancer and all containers' =>
+          self.timeout (5 * 60 * 1000)
+
+          cluster.deployWebsites()!
+          waitFor 4 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+
+          config2 = JSON.parse(JSON.stringify(config))
+          config2.websites = []
+          cluster2 = snowdock.cluster(config2)
+          cluster2.uninstall()!
+
+          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.should.eql []
+          findContainers(imageName: 'hipache')!.should.eql []
 
     describe 'web clusters'
       beforeEach =>
         self.timeout (5 mins)
-        snowdockLb.remove()!
-        snowdockLb.run()!
+        snowdockLb.uninstall()!
+        snowdockLb.install()!
 
         removeAllContainers(command: 'node_modules/.bin/pogo index.pogo')!
         snowdockHost.removeImage(imageName)!
@@ -126,7 +203,7 @@ describe 'deploy'
       it 'can create a web cluster' =>
         self.timeout (5 * 60 * 1000)
 
-        snowdockHost.runWebCluster! {
+        snowdockHost.deployWebsite! {
           container = {
             image = imageName
             ports = ["80"]
@@ -140,7 +217,7 @@ describe 'deploy'
       it 'can create and update a web cluster' =>
         self.timeout (5 * 60 * 1000)
 
-        snowdockHost.runWebCluster! {
+        snowdockHost.deployWebsite! {
           container = {
             image = imageName
             ports = ["80"]
@@ -151,10 +228,10 @@ describe 'deploy'
 
         waitFor 2 backendsToRespond (host: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
 
-        makeChangeToApp()!
+        makeChangeToApp('v2')!
         buildDockerImage (imageName: imageName, dir: 'nodeapp')!
 
-        snowdockHost.runWebCluster! {
+        snowdockHost.deployWebsite! {
           container = {
             image = imageName
             ports = ["80"]
@@ -173,7 +250,7 @@ describe 'deploy'
     describe 'load balancer'
       beforeEach =>
         self.timeout (5 * 60 * 1000)
-        snowdockLb.remove()!
+        snowdockLb.uninstall()!
 
       shouldBeRunning()! =
         retry(timeout: 10000)!
@@ -190,20 +267,20 @@ describe 'deploy'
       it 'installs hipache' =>
         self.timeout (5 * 60 * 1000)
 
-        snowdockLb.run()!
+        snowdockLb.install()!
         shouldBeRunning()!
 
       context 'given that it is installed'
         beforeEach =>
           self.timeout (5 * 60 * 1000)
-          snowdockLb.run()!
+          snowdockLb.install()!
 
         it 'can stop it and start it again' =>
           self.timeout (5 * 60 * 1000)
           snowdockLb.stop()!
           shouldNotBeRunning()!
 
-          snowdockLb.run()!
+          snowdockLb.install()!
           shouldBeRunning()!
 
   context 'given a built image'
@@ -260,7 +337,7 @@ describe 'deploy'
 
         monitor.start()
 
-        makeChangeToApp()!
+        makeChangeToApp('v2')!
         buildDockerImage (imageName: imageName, dir: 'nodeapp')!
         pullImage (imageName)!
 
@@ -302,8 +379,8 @@ describe 'deploy'
       totalInterruptionTime = 0
     }
 
-  makeChangeToApp() =
-    fs.writeFile 'nodeapp/views/index.txt' 'hi from <%= host %>, v2'!
+  makeChangeToApp(version) =
+    fs.writeFile 'nodeapp/views/index.txt' "hi from <%= host %>, #(version)"!
 
   buildDockerImage (imageName: nil, dir: nil) =
     process.chdir "#(__dirname)/.."
