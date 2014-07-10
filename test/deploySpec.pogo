@@ -99,82 +99,141 @@ describe 'snowdock'
     hipacheRedis.on 'error' @{}
     hipacheRedis.info(^).should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
 
-  it 'installs and runs load balancer' =>
-    self.timeout (5 mins)
-    snowdock.cluster(config).install()!
-    shouldBeRunning()!
+  describeApi (api) =
+    beforeEach
+      api.before()!
 
-  it "doesn't have the load balancer running"
-    shouldNotBeRunning()!
-
-  context 'when it is installed'
-    cluster = nil
-
-    beforeEach =>
+    it 'installs and runs load balancer' =>
       self.timeout (5 mins)
-      cluster := snowdock.cluster(config)
-      cluster.install()!
-      console.log "waiting for socket: #(vip):#(6379)"
-      waitForSocket(vip, 6379, timeout: 2000)!
-      console.log "finished"
-
-    it 'can create a web cluster' =>
-      self.timeout (5 mins)
-
-      cluster.deployWebsites()!
-      waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
-
-    context 'with no service interruption'
-      monitor = nil
-
-      beforeEach
-        monitor := serviceMonitor(host: vip, hostname: 'nodeapp')
-
-      afterEach
-        monitor.stop()
-
-        monitor.totalInterruptionTime.should.equal 0
-        should.not.exist(monitor.error)
-
-      it 'can update a web cluster' =>
-        self.timeout (5 mins)
-
-        cluster.deployWebsites()!
-        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
-
-        makeChangeToApp('v2')!
-        buildDockerImage (imageName: imageName, dir: 'nodeapp')!
-
-        cluster.deployWebsites()!
-        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*), v2$/)!
-
-        makeChangeToApp('v3')!
-        buildDockerImage (imageName: imageName, dir: 'nodeapp')!
-
-        cluster.deployWebsites()!
-        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*), v3$/)!
-
-    it 'can stop the load balancer and start it again' =>
-      self.timeout (5 * 60 * 1000)
-      cluster.stop()!
-      shouldNotBeRunning()!
-
-      cluster.start()!
+      api.install()!
       shouldBeRunning()!
 
-    it 'uninstalls the load balancer and all containers' =>
-      self.timeout (5 * 60 * 1000)
+    it "doesn't have the load balancer running"
+      shouldNotBeRunning()!
 
-      cluster.deployWebsites()!
-      waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+    context 'when it is installed'
+      beforeEach =>
+        self.timeout (5 mins)
+        api.install()!
+        console.log "waiting for socket: #(vip):#(6379)"
+        waitForSocket(vip, 6379, timeout: 2000)!
 
-      config2 = JSON.parse(JSON.stringify(config))
-      config2.websites = []
-      cluster2 = snowdock.cluster(config2)
-      cluster2.uninstall()!
+      it 'can create a web cluster' =>
+        self.timeout (5 mins)
 
-      findContainers(command: 'node_modules/.bin/pogo index.pogo')!.should.eql []
-      findContainers(imageName: 'hipache')!.should.eql []
+        api.deploy()!
+        console.log "waiting for backends"
+        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+
+      context 'with no service interruption'
+        monitor = nil
+
+        beforeEach
+          monitor := serviceMonitor(host: vip, hostname: 'nodeapp')
+
+        afterEach
+          monitor.stop()
+
+          monitor.totalInterruptionTime.should.equal 0
+          should.not.exist(monitor.error)
+
+        it 'can update a web cluster' =>
+          self.timeout (5 mins)
+
+          api.deploy()!
+          waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+
+          makeChangeToApp('v2')!
+          buildDockerImage (imageName: imageName, dir: 'nodeapp')!
+
+          api.deploy()!
+          waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*), v2$/)!
+
+          makeChangeToApp('v3')!
+          buildDockerImage (imageName: imageName, dir: 'nodeapp')!
+
+          api.deploy()!
+          waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*), v3$/)!
+
+      it 'can stop the load balancer and start it again' =>
+        self.timeout (5 * 60 * 1000)
+        api.stop()!
+        shouldNotBeRunning()!
+
+        api.start()!
+        shouldBeRunning()!
+
+      it 'uninstalls the load balancer and all containers' =>
+        self.timeout (5 * 60 * 1000)
+
+        api.deploy()!
+        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+
+        config2 = JSON.parse(JSON.stringify(config))
+        config2.websites = []
+        api.setConfig(config2)
+        api.uninstall()!
+
+        findContainers(command: 'node_modules/.bin/pogo index.pogo')!.should.eql []
+        findContainers(imageName: 'hipache')!.should.eql []
+
+  describe 'api'
+    api =
+      cluster = nil
+      clusterConfig = nil
+
+      {
+        before() =
+          clusterConfig := config
+          cluster := snowdock.cluster(clusterConfig)
+
+        install()! = cluster.install()!
+        uninstall()! = cluster.uninstall()!
+        deploy()! = cluster.deployWebsites()!
+        start()! = cluster.start()!
+        stop()! = cluster.stop()!
+
+        setConfig(c) =
+          clusterConfig := c
+          cluster := snowdock.cluster(clusterConfig)
+      }
+
+    describeApi (api)
+
+  describe 'command line'
+    commandLine =
+      cluster = nil
+      clusterConfig = nil
+
+      spawn(command, args, ...)! =
+        console.log "launching #(command) #(args.join ' ')"
+        promise @(result, error)
+          process = child_process.spawn(command, args, stdio: 'inherit')
+
+          process.on 'error' @(e)
+            console.log "error: #(e)"
+            error(e)
+
+          process.on 'close' @(exitCode)
+            console.log "exited: #(exitCode)"
+            result(exitCode)
+
+      api = {
+        before() =
+          fs.writeFile "#(__dirname)/snowdock.json" (JSON.stringify(config)) ^!
+
+        setConfig(c) =
+          fs.writeFile "#(__dirname)/snowdock.json" (JSON.stringify(c)) ^!
+      }
+
+      for each @(cmd) in ('install uninstall deploy start stop'.split ' ')
+        @(cmd)@{
+          api.(cmd) ()! = spawn "bin/snowdock" (cmd) "-c" "#(__dirname)/snowdock.json"!
+        }(cmd)
+
+      api
+
+    describeApi (commandLine)
 
   serviceMonitor(host: nil, hostname: nil) =
     interval = nil

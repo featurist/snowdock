@@ -6,9 +6,19 @@ connectToDocker(host) =
   log.debug "connecting to docker '#('http://' + host.docker.host):#(host.docker.port)'"
   @new Docker(host: 'http://' + host.docker.host, port: host.docker.port)
 
+redisClients = []
+
+exports.closeRedisConnections() =
+  try
+    [c <- redisClients, c.quit(^)!]
+  catch (e)
+    [c <- redisClients, c.end(^)!]
+
 connectToRedis(host) =
   log.debug "connecting to redis '#(host.redis.host):#(host.redis.port)'"
-  redis.createClient(host.redis.port, host.redis.host)
+  client = redis.createClient(host.redis.port, host.redis.host)
+  redisClients.push(client)
+  client
 
 exports.cluster (config) =
   withLoadBalancers (block) =
@@ -43,7 +53,6 @@ exports.cluster (config) =
         lb.install()!
 
     uninstall()! =
-      self.removeWebsites()!
       withLoadBalancers! @(lb)
         lb.uninstall()!
 
@@ -122,16 +131,21 @@ exports.host (host) =
         {port = port, container = container.name, host = host.internalIp}
       ]
 
+      log.debug "waiting 2000"
       setTimeout ^ 2000!
 
+      log.debug "setting up backends"
       lb.addBackends! (backends, hostname: websiteConfig.hostname)
       lb.removeBackends! (existingBackends, hostname: websiteConfig.hostname)
       lb.setBackends! (backends, hostname: websiteConfig.hostname)
 
+      log.debug "removing backends"
       [
         b <- existingBackends
         self.container(b.container).remove(force: true)!
       ]
+
+      log.debug "deployed website"
 
     removeWebsite! (hostname) =
       log.debug "removing website '#(hostname)'"
@@ -293,11 +307,12 @@ loadBalancer (host, docker, redisDb) =
         h.stop(^)!
 
     uninstall() =
-      [
-        key <- redisDb()!.keys(backendKey '*', ^)!
-        hostname = key.split ':'.1
-        host.removeWebsite(hostname)!
-      ]
+      if (self.isRunning()!)
+        [
+          key <- redisDb()!.keys(backendKey '*', ^)!
+          hostname = key.split ':'.1
+          host.removeWebsite(hostname)!
+        ]
 
       host.container(hipacheName).remove(force: true)!
 
