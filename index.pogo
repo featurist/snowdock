@@ -57,10 +57,17 @@ exports.cluster (config) =
   }
 
 exports.host (host) =
-  docker = connectToDocker(host)
+  docker =
+    dockerClient = nil
+    cachedDocker()! =
+      if (dockerClient)
+        dockerClient
+      else
+        dockerClient := connectToDocker(host)
+
   redisDb =
     client = nil
-    @()
+    cachedRedisDb()! =
       if (client)
         client
       else
@@ -153,7 +160,7 @@ exports.host (host) =
       if (@not self.image(containerConfig.image).status()!)
         self.pullImage(containerConfig.image)!
 
-      container = docker.createContainer(createOptions, ^)!
+      container = docker()!.createContainer(createOptions, ^)!
 
       startOptions = {
         PortBindings = portBindings(containerConfig.publish)
@@ -171,7 +178,7 @@ exports.host (host) =
 
     pullImage (imageName)! =
       promise! @(result, error)
-        docker.pull (imageName) @(e, stream)
+        docker()!.pull (imageName) @(e, stream)
           if (e)
             error(e)
           else
@@ -188,7 +195,7 @@ exports.host (host) =
 container (name, host, docker) =
   {
     status() =
-      container = docker.getContainer(name)
+      container = docker()!.getContainer(name)
       try
         container.inspect(^)!
       catch (e)
@@ -202,7 +209,7 @@ container (name, host, docker) =
     remove(force: false)! =
       try
         log.debug "removing container '#(name)'"
-        container = docker.getContainer(name)
+        container = docker()!.getContainer(name)
         container.remove {force = force} ^!
         true
       catch (e)
@@ -213,7 +220,7 @@ container (name, host, docker) =
 
     start()! =
       log.debug "starting container '#(name)'"
-      docker.getContainer(name).start(^)!
+      docker()!.getContainer(name).start(^)!
 
     isRunning()! =
       h = self.status()!
@@ -225,7 +232,7 @@ image (name, host, docker) =
   {
     remove(force: false)! =
       log.debug "removing image '#(name)'"
-      image = docker.getImage(name)
+      image = docker()!.getImage(name)
       try
         image.remove({force = force}, ^)!
         true
@@ -236,7 +243,7 @@ image (name, host, docker) =
           throw (e)
 
     status()! =
-      image = docker.getImage(name)
+      image = docker()!.getImage(name)
       try
         image.inspect (^)!
       catch (e)
@@ -282,12 +289,12 @@ loadBalancer (host, docker, redisDb) =
 
     stop() =
       if (self.isRunning()!)
-        h = docker.getContainer(hipacheName)
+        h = docker()!.getContainer(hipacheName)
         h.stop(^)!
 
     uninstall() =
       [
-        key <- redisDb().keys(backendKey '*', ^)!
+        key <- redisDb()!.keys(backendKey '*', ^)!
         hostname = key.split ':'.1
         host.removeWebsite(hostname)!
       ]
@@ -295,29 +302,37 @@ loadBalancer (host, docker, redisDb) =
       host.container(hipacheName).remove(force: true)!
 
     addBackends(hosts, hostname: nil) =
-      len = redisDb().llen (frontendKey(hostname)) ^!
+      redis = redisDb()!
+
+      len = redis.llen (frontendKey(hostname)) ^!
       if (len == 0)
-        redisDb().rpush(frontendKey(hostname), hostname, ^)!
+        redis.rpush(frontendKey(hostname), hostname, ^)!
 
       [
         h <- hosts
-        redisDb().rpush(frontendKey(hostname), "http://#(h.host):#(h.port)", ^)!
+        redis.rpush(frontendKey(hostname), "http://#(h.host):#(h.port)", ^)!
       ]
 
     backendsByHostname(hostname) =
-      [h <- redisDb().lrange (backendKey(hostname), 0, -1) ^!, JSON.parse(h)]
+      redis = redisDb()!
+
+      [h <- redis.lrange (backendKey(hostname), 0, -1) ^!, JSON.parse(h)]
 
     removeBackends(hosts, hostname: nil) =
+      redis = redisDb()!
+
       [
         h <- hosts
-        redisDb().lrem (frontendKey(hostname), 0, frontendHost(h)) ^!
+        redis.lrem (frontendKey(hostname), 0, frontendHost(h)) ^!
       ]
 
     setBackends(hosts, hostname: nil) =
-      redisDb().del(backendKey(hostname), ^)!
+      redis = redisDb()!
+
+      redis.del(backendKey(hostname), ^)!
       [
         h <- hosts
-        redisDb().rpush(backendKey(hostname), JSON.stringify(h), ^)!
+        redis.rpush(backendKey(hostname), JSON.stringify(h), ^)!
       ]
   }
 
