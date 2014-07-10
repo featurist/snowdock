@@ -1,6 +1,4 @@
-connectToShipyard = require '../shipyard'
 httpism = require 'httpism'
-shipyardApiKey = require '../shipyardApiKey'
 fs = require 'fs'
 vagrantIp = require '../vagrantIp'
 chai = require 'chai'
@@ -13,7 +11,7 @@ sshForward = require 'ssh-forward'
 snowdock = require '../index'
 retry = require '../../../VCP.API/IMD.VCP.API/ui/common/retry'
 redis = require 'redis'
-require 'longjohn'
+//require 'longjohn'
 waitForSocket = require 'waitforsocket'
 
 describe 'snowdock'
@@ -39,8 +37,8 @@ describe 'snowdock'
     removeAllContainers(imageName: 'hipache')!
 
     config := {
-      hosts = [
-        {
+      hosts = {
+        "vagrant" = {
           docker = {
             host = vip
             port = 4243
@@ -51,9 +49,9 @@ describe 'snowdock'
           }
           internalIp = "172.17.42.1"
         }
-      ]
-      websites = [
-        {
+      }
+      websites = {
+        "nodeapp" = {
           nodes = 4
           hostname  = 'nodeapp'
           container = {
@@ -61,10 +59,10 @@ describe 'snowdock'
             publish = ["80"]
           }
         }
-      ]
+      }
     }
 
-    snowdock.host(config.hosts.0).removeImage(imageName)!
+    snowdock.host(config.hosts.vagrant).image(imageName).remove(force: true)!
 
   findContainers(imageName: nil, command: nil) =
     docker = @new Docker(host: dockerHost, port: dockerPort)
@@ -116,7 +114,9 @@ describe 'snowdock'
       self.timeout (5 mins)
       cluster := snowdock.cluster(config)
       cluster.install()!
+      console.log "waiting for socket: #(vip):#(6379)"
       waitForSocket(vip, 6379, timeout: 2000)!
+      console.log "finished"
 
     it 'can create a web cluster' =>
       self.timeout (5 mins)

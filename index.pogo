@@ -3,96 +3,56 @@ _ = require 'underscore'
 redis = require 'redis'
 
 connectToDocker(host) =
+  log.debug "connecting to docker '#('http://' + host.docker.host):#(host.docker.port)'"
   @new Docker(host: 'http://' + host.docker.host, port: host.docker.port)
 
 connectToRedis(host) =
+  log.debug "connecting to redis '#(host.redis.host):#(host.redis.port)'"
   redis.createClient(host.redis.port, host.redis.host)
-
-container (name, host, docker) =
-  {
-    status() =
-      container = docker.getContainer(name)
-      try
-        container.inspect(^)!
-      catch (e)
-        if (e.statusCode == 404)
-          nil
-        else
-          throw (e)
-
-    name = name
-
-    remove()! =
-      container = docker.getContainer(name)
-      container.remove {force = true} ^!
-  }
-
-image (name, host, docker) =
-  {
-    remove()! =
-      image = docker.getImage(name)
-      try
-        image.remove(^)!
-        true
-      catch (e)
-        if (e.statusCode == 404)
-          false
-        else
-          throw (e)
-
-    status()! =
-      image = docker.getImage(name)
-      try
-        image.inspect (^)!
-      catch (e)
-        if (e.statusCode == 404)
-          nil
-        else
-          throw (e)
-
-    name = name
-  }
 
 exports.cluster (config) =
   withLoadBalancers (block) =
     [
-      hostConfig <- config.hosts
+      hostKey <- Object.keys(config.hosts)
+      hostConfig = config.hosts.(hostKey)
       lb = exports.host(hostConfig).loadBalancer()
       block(lb)!
+    ]
+
+  withWebsites (block) =
+    [
+      hostKey <- Object.keys(config.hosts)
+      hostConfig = config.hosts.(hostKey)
+      host = exports.host(hostConfig)
+      websiteKey <- Object.keys(config.websites)
+      websiteConfig = config.websites.(websiteKey)
+      block(host, websiteConfig)!
     ]
     
   {
     deployWebsites()! =
-      [
-        hostConfig <- config.hosts
-        host = exports.host(hostConfig)
-        websiteConfig <- config.websites
+      withWebsites! @(host, websiteConfig)
         host.deployWebsite! (websiteConfig)
-      ]
 
     removeWebsites()! =
-      [
-        hostConfig <- config.hosts
-        host = exports.host(hostConfig)
-        websiteConfig <- config.websites
+      withWebsites! @(host, websiteConfig)
         host.removeWebsite! (websiteConfig.hostname)
-      ]
 
     install()! =
-      withLoadBalancers @(lb)
+      withLoadBalancers! @(lb)
         lb.install()!
 
     uninstall()! =
       self.removeWebsites()!
-      withLoadBalancers @(lb)
+      withLoadBalancers! @(lb)
         lb.uninstall()!
 
     start()! =
-      withLoadBalancers @(lb)
+      withLoadBalancers! @(lb)
         lb.start()!
 
     stop()! =
-      withLoadBalancers @(lb)
+      withLoadBalancers! @(lb)
         lb.stop()!
   }
 
@@ -141,6 +101,7 @@ exports.host (host) =
 
   {
     deployWebsite! (websiteConfig) =
+      log.debug "deploying website '#(websiteConfig.hostname)'"
       lb = self.loadBalancer()
 
       existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
@@ -162,10 +123,11 @@ exports.host (host) =
 
       [
         b <- existingBackends
-        self.container(b.container).remove()!
+        self.container(b.container).remove(force: true)!
       ]
 
     removeWebsite! (hostname) =
+      log.debug "removing website '#(hostname)'"
       lb = self.loadBalancer()
 
       existingBackends = lb.backendsByHostname(hostname)!
@@ -175,12 +137,14 @@ exports.host (host) =
 
       [
         b <- existingBackends
-        self.container(b.container).remove()!
+        self.container(b.container).remove(force: true)!
       ]
       
     loadBalancer() = loadBalancer(self, docker, redisDb)
 
     runContainer (containerConfig) =
+      log.debug "running container with image '#(containerConfig.image)'"
+
       createOptions = {
         Image = containerConfig.image
         name = containerConfig.name
@@ -205,9 +169,6 @@ exports.host (host) =
     status(name) =
       self.container(name).status()!
 
-    removeImage(name)! =
-      self.image(name).remove()!
-
     pullImage (imageName)! =
       promise! @(result, error)
         docker.pull (imageName) @(e, stream)
@@ -224,6 +185,69 @@ exports.host (host) =
       self.image(imageName)
   }
 
+container (name, host, docker) =
+  {
+    status() =
+      container = docker.getContainer(name)
+      try
+        container.inspect(^)!
+      catch (e)
+        if (e.statusCode == 404)
+          nil
+        else
+          throw (e)
+
+    name = name
+
+    remove(force: false)! =
+      try
+        log.debug "removing container '#(name)'"
+        container = docker.getContainer(name)
+        container.remove {force = force} ^!
+        true
+      catch (e)
+        if (e.reason != 'no such container')
+          throw (e)
+        else
+          false
+
+    start()! =
+      log.debug "starting container '#(name)'"
+      docker.getContainer(name).start(^)!
+
+    isRunning()! =
+      h = self.status()!
+      if (h)
+        h.State.Running
+  }
+
+image (name, host, docker) =
+  {
+    remove(force: false)! =
+      log.debug "removing image '#(name)'"
+      image = docker.getImage(name)
+      try
+        image.remove({force = force}, ^)!
+        true
+      catch (e)
+        if (e.statusCode == 404)
+          false
+        else
+          throw (e)
+
+    status()! =
+      image = docker.getImage(name)
+      try
+        image.inspect (^)!
+      catch (e)
+        if (e.statusCode == 404)
+          nil
+        else
+          throw (e)
+
+    name = name
+  }
+
 loadBalancer (host, docker, redisDb) =
   hipacheName = 'snowdock-hipache'
 
@@ -233,12 +257,10 @@ loadBalancer (host, docker, redisDb) =
 
   {
     isInstalled()! =
-      host.status(hipacheName)!
+      host.container(hipacheName).status()!
 
     isRunning()! =
-      h = host.status(hipacheName)!
-      if (h)
-        h.State.Running
+      host.container(hipacheName).isRunning()!
 
     install() =
       if (@not self.isInstalled()!)
@@ -249,16 +271,14 @@ loadBalancer (host, docker, redisDb) =
         }
       else
         if (@not self.isRunning()!)
-          h = docker.getContainer(hipacheName)
-          h.start(^)!
+          host.container(hipacheName).start()!
 
     start() =
       if (@not self.isInstalled()!)
         throw (new (Error "not installed"))
       else
         if (@not self.isRunning()!)
-          h = docker.getContainer(hipacheName)
-          h.start(^)!
+          host.container(hipacheName).start()!
 
     stop() =
       if (self.isRunning()!)
@@ -272,12 +292,7 @@ loadBalancer (host, docker, redisDb) =
         host.removeWebsite(hostname)!
       ]
 
-      try
-        h = docker.getContainer(hipacheName)
-        h.remove {force = true} ^!
-      catch (e)
-        if (e.reason != 'no such container')
-          throw (e)
+      host.container(hipacheName).remove(force: true)!
 
     addBackends(hosts, hostname: nil) =
       len = redisDb().llen (frontendKey(hostname)) ^!
@@ -305,3 +320,7 @@ loadBalancer (host, docker, redisDb) =
         redisDb().rpush(backendKey(hostname), JSON.stringify(h), ^)!
       ]
   }
+
+log = {
+  debug (msg, ...) = console.log(msg, ...)
+}
