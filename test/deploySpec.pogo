@@ -1,6 +1,6 @@
 httpism = require 'httpism'
 fs = require 'fs'
-vagrantIp = require '../vagrantIp'
+vagrantIp = require './vagrantIp'
 chai = require 'chai'
 should = chai.should()
 chaiAsPromised = require 'chai-as-promised'

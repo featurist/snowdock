@@ -23,7 +23,6 @@ try
     cluster.removeWebsites()!
   else
     console.log "no such command: #(command)"
-
 catch (e)
   console.log (e)
 finally
