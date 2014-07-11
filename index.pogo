@@ -38,6 +38,13 @@ exports.cluster (config) =
       websiteConfig = config.websites.(websiteKey)
       block(host, websiteConfig)!
     ]
+
+  hosts () =
+    [
+      hostKey <- Object.keys(config.hosts)
+      hostConfig = config.hosts.(hostKey)
+      exports.host(hostConfig)
+    ]
     
   {
     deployWebsites()! =
@@ -50,7 +57,7 @@ exports.cluster (config) =
 
     install()! =
       withLoadBalancers! @(lb)
-        lb.install()!
+        lb.install(config.loadbalancer)!
 
     uninstall()! =
       withLoadBalancers! @(lb)
@@ -63,6 +70,11 @@ exports.cluster (config) =
     stop()! =
       withLoadBalancers! @(lb)
         lb.stop()!
+
+    run(name)! =
+      containerConfig = config.containers.(name)
+
+      [host <- hosts(), host.runContainer (_.extend({name = name}, containerConfig))!]
   }
 
 exports.host (host) =
@@ -283,13 +295,13 @@ loadBalancer (host, docker, redisDb) =
     isRunning()! =
       host.container(hipacheName).isRunning()!
 
-    install() =
+    install(config) =
       if (@not self.isInstalled()!)
-        host.runContainer! {
+        host.runContainer! (_.extend {
           image = 'hipache'
           name = hipacheName
           publish = ['80:80', '6379:6379']
-        }
+        } (config))
       else
         if (@not self.isRunning()!)
           host.container(hipacheName).start()!

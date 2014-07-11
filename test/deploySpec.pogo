@@ -63,6 +63,7 @@ describe 'snowdock'
     }
 
     snowdock.host(config.hosts.vagrant).image(imageName).remove(force: true)!
+    buildDockerImage (imageName: imageName, dir: 'nodeapp')!
 
   findContainers(imageName: nil, command: nil) =
     docker = @new Docker(host: dockerHost, port: dockerPort)
@@ -82,9 +83,9 @@ describe 'snowdock'
       cont.remove {force = true} ^!
     ]
 
-  shouldBeRunning()! =
+  shouldBeRunning(hipachePort: 80)! =
     retry(timeout: 10000)!
-      response = httpism.get "http://#(vip)/" (exceptions: false)!
+      response = httpism.get "http://#(vip):#(hipachePort)/" (exceptions: false)!
       response.statusCode.should.equal 400
       response.body.should.match r/no application configured/i
 
@@ -110,6 +111,19 @@ describe 'snowdock'
 
     it "doesn't have the load balancer running"
       shouldNotBeRunning()!
+
+    it 'can start the loadbalancer with container options' =>
+      self.timeout (5 mins)
+
+      api.setConfig {
+        hosts = config.hosts
+        loadbalancer = {
+          publish = ['8000:80', '6379:6379']
+        }
+      }
+      api.install()!
+
+      shouldBeRunning(hipachePort: 8000)!
 
     context 'when it is installed'
       beforeEach =>
@@ -177,6 +191,23 @@ describe 'snowdock'
         findContainers(command: 'node_modules/.bin/pogo index.pogo')!.should.eql []
         findContainers(imageName: 'hipache')!.should.eql []
 
+      it 'can run arbitrary containers' =>
+        self.timeout (5 mins)
+
+        api.setConfig {
+          hosts = config.hosts
+          containers = {
+            nodeapp = {
+              image = imageName
+              publish = ["8000:80"]
+            }
+          }
+        }
+        api.run 'nodeapp'!
+
+        httpism.get "http://#(vip):8000"!.body.should.match r/^hi from/
+        should.exist(snowdock.host (config.hosts.vagrant).container('nodeapp').status()!)
+
   describe 'api'
     api =
       cluster = nil
@@ -192,6 +223,7 @@ describe 'snowdock'
         deploy()! = cluster.deployWebsites()!
         start()! = cluster.start()!
         stop()! = cluster.stop()!
+        run(args, ...)! = cluster.run(args, ...)!
 
         setConfig(c) =
           clusterConfig := c
@@ -216,7 +248,10 @@ describe 'snowdock'
 
           process.on 'close' @(exitCode)
             console.log "exited: #(exitCode)"
-            result(exitCode)
+            if (exitCode == 0)
+              result(exitCode)
+            else
+              error(@new Error "command #(command) #(args.join ' ') exited with #(exitCode)")
 
       api = {
         before() =
@@ -226,9 +261,9 @@ describe 'snowdock'
           fs.writeFile "#(__dirname)/snowdock.json" (JSON.stringify(c)) ^!
       }
 
-      for each @(cmd) in ('install uninstall deploy start stop'.split ' ')
+      for each @(cmd) in ('install uninstall deploy start stop run'.split ' ')
         @(cmd)@{
-          api.(cmd) ()! = spawn "bin/snowdock" (cmd) "-c" "#(__dirname)/snowdock.json"!
+          api.(cmd) (args, ...)! = spawn "bin/snowdock" (cmd) "-c" "#(__dirname)/snowdock.json" (args) ...!
         }(cmd)
 
       api

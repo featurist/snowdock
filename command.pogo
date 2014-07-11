@@ -21,9 +21,12 @@ try
     cluster.stop()!
   else if (command == 'remove')
     cluster.removeWebsites()!
+  else if (command == 'run')
+    cluster.run(argv._, ...)!
   else
     console.log "no such command: #(command)"
 catch (e)
   console.log (e)
+  process.exit(1)
 finally
   snowdock.closeRedisConnections()
