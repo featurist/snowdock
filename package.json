@@ -1,0 +1,41 @@
+{
+  "name": "snowdock",
+  "version": "0.1.0",
+  "description": "automation of website deployment with docker",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "dependencies": {
+    "bluebird": "^2.2.1",
+    "chai": "^1.9.1",
+    "chai-as-promised": "^4.1.1",
+    "dockerode": "^2.0.0",
+    "minimist": "^0.2.0",
+    "pogo": "^0.8.7",
+    "httpism": "^0.1.2",
+    "redis": "^0.10.3",
+    "ssh-forward": "^0.1.1",
+    "underscore": "^1.6.0",
+    "waitforsocket": "^0.1.1",
+    "longjohn": "^0.2.4",
+    "decking": "^0.0.18",
+    "needle": "^0.7.2",
+    "qo": "^0.2.1"
+  },
+  "devDependencies": {
+    "mocha": "^1.20.1"
+  },
+  "scripts": {
+    "test": "mocha test/**Spec.*"
+  },
+  "keywords": [
+    "docker",
+    "hipache",
+    "deployment",
+    "website",
+    "devops"
+  ],
+  "author": "Tim Macfarlane <timmacfarlane@gmail.com>",
+  "license": "MIT"
+}
