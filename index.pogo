@@ -65,9 +65,11 @@ exports.cluster (config) =
         host.updateWebsite! (config.websites.(name))
       ]
 
-    removeWebsites()! =
-      withWebsites! @(host, websiteConfig)
-        host.removeWebsite! (websiteConfig.hostname)
+    removeWebsite(name)! =
+      [
+        host <- hosts()
+        host.removeWebsite! (config.websites.(name))
+      ]
 
     startProxy()! =
       withLoadBalancers! @(lb)
@@ -81,7 +83,7 @@ exports.cluster (config) =
       withLoadBalancers! @(lb)
         lb.stop()!
 
-    run(name)! =
+    start(name)! =
       containerConfig = config.containers.(name)
 
       [host <- hosts(), host.runContainer (_.extend({name = name}, containerConfig))!]

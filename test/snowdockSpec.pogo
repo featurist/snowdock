@@ -106,7 +106,7 @@ describe 'snowdock' =>
       api.setConfig! (config)!
       api.before()!
 
-    it 'installs and runs proxy'
+    it 'starts proxy'
       api.startProxy()!
       proxyShouldBeRunning()!
 
@@ -206,7 +206,7 @@ describe 'snowdock' =>
               }
             }
           }
-          api.run 'nodeapp'!
+          api.start 'nodeapp'!
 
           httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
           status = snowdock.host (config.hosts.vagrant).container('nodeapp').status()!
@@ -268,10 +268,10 @@ describe 'snowdock' =>
           fs.writeFile "#(__dirname)/snowdock.json" (JSON.stringify(c)) ^!
       }
 
-      for each @(cmd) in ('startProxy removeProxy deploy start stop run'.split ' ')
+      for each @(cmd) in ('startProxy stopProxy removeProxy startWebsite updateWebsite stopWebsite start stop'.split ' ')
         @(cmd)@{
-          commandLineCommand = cmd.replace r/([A-Z])/g @(l) @{ ' ' + l.toLowerCase() }.trim()
-          api.(cmd) (args, ...)! = spawn "bin/snowdock" (commandLineCommand) "-c" "#(__dirname)/snowdock.json" (args) ...!
+          commandLineCommand = cmd.replace r/([A-Z])/g @(l) @{ ' ' + l.toLowerCase() }.trim().split ' '
+          api.(cmd) (args, ...)! = spawn "bin/snowdock" "-c" "#(__dirname)/snowdock.json" (commandLineCommand, ..., args, ...)!
         }(cmd)
 
       api

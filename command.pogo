@@ -10,27 +10,39 @@ cluster = snowdock.cluster(JSON.parse(fs.readFile (filename, 'utf-8', ^)!))
 
 try
   if (command == 'start')
-    container = argv._.shift()
+    startContainer = argv._.shift()
 
-    if (container == 'all')
-    else if (container == 'proxy')
+    if (startContainer == 'proxy')
       cluster.startProxy()!
-    else if (container == 'website')
+    else if (startContainer == 'website')
       cluster.startWebsite(argv._.shift())!
     else
-      cluster.start(container)!
-  else if (command == 'uninstall')
-    cluster.uninstall()!
-  else if (command == 'deploy')
-    cluster.deployWebsites()!
-  else if (command == 'start')
-    cluster.start()!
-  else if (command == 'stop')
-    cluster.stop()!
+      cluster.start(startContainer)!
   else if (command == 'remove')
-    cluster.removeWebsites()!
-  else if (command == 'run')
-    cluster.run(argv._, ...)!
+    removeContainer = argv._.shift()
+
+    if (removeContainer == 'proxy')
+      cluster.removeProxy()!
+    else if (removeContainer == 'website')
+      cluster.removeWebsite(argv._.shift())!
+    else
+      cluster.remove(removeContainer)!
+  else if (command == 'update')
+    updateContainer = argv._.shift()
+
+    if (updateContainer == 'website')
+      cluster.updateWebsite(argv._.shift())!
+    else
+      cluster.update(updateContainer)!
+  else if (command == 'stop')
+    stopContainer = argv._.shift()
+
+    if (stopContainer == 'proxy')
+      cluster.stopProxy()!
+    else if (stopContainer == 'website')
+      cluster.stopWebsite(argv._.shift())!
+    else
+      cluster.stop(stopContainer)!
   else
     console.log "no such command: #(command)"
 catch (e)
