@@ -110,8 +110,26 @@ exports.host (host) =
   (s) toArray =
     if (s :: Array)
       s
-    else
+    else if (s)
       [s]
+    else
+      []
+
+  volumes(vols) =
+    v = {}
+
+    for each @(vol) in ((vols) toArray)
+      split = vol.split ':'
+      
+      v.(split.0) =
+        if (split.1)
+          mapping = {}
+          mapping.(split.1) = split.2 @or 'rw'
+          mapping
+        else
+          {}
+
+    v
 
   portBindings (ports, create: false) =
     if (ports)
@@ -181,6 +199,7 @@ exports.host (host) =
       createOptions = {
         Image = containerConfig.image
         name = containerConfig.name
+        Volumes = volumes(containerConfig.volumes)
       }
 
       if (@not self.image(containerConfig.image).status()!)

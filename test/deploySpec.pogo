@@ -11,7 +11,6 @@ sshForward = require 'ssh-forward'
 snowdock = require '../index'
 retry = require '../../../VCP.API/IMD.VCP.API/ui/common/retry'
 redis = require 'redis'
-//require 'longjohn'
 waitForSocket = require 'waitforsocket'
 
 describe 'snowdock'
@@ -26,7 +25,7 @@ describe 'snowdock'
   beforeEach =>
     self.timeout (5 mins)
 
-    fs.writeFile 'nodeapp/views/index.txt' 'hi from <%= host %>'!
+    makeChangeToApp(1)!
     vip := vagrantIp()!
     dockerRegistryDomain := "#(vip):5000"
     dockerHost := "http://#(vip)"
@@ -137,7 +136,7 @@ describe 'snowdock'
 
         api.deploy()!
         console.log "waiting for backends"
-        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
 
       context 'with no service interruption'
         monitor = nil
@@ -155,19 +154,19 @@ describe 'snowdock'
           self.timeout (5 mins)
 
           api.deploy()!
-          waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+          waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
 
-          makeChangeToApp('v2')!
+          makeChangeToApp(2)!
           buildDockerImage (imageName: imageName, dir: 'nodeapp')!
 
           api.deploy()!
-          waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*), v2$/)!
+          waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', version: 2)!
 
-          makeChangeToApp('v3')!
+          makeChangeToApp(3)!
           buildDockerImage (imageName: imageName, dir: 'nodeapp')!
 
           api.deploy()!
-          waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*), v3$/)!
+          waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', version: 3)!
 
       it 'can stop the load balancer and start it again' =>
         self.timeout (5 * 60 * 1000)
@@ -181,7 +180,7 @@ describe 'snowdock'
         self.timeout (5 * 60 * 1000)
 
         api.deploy()!
-        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', responseRegex: r/^hi from (.*)$/)!
+        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
 
         config2 = JSON.parse(JSON.stringify(config))
         config2.websites = []
@@ -199,14 +198,18 @@ describe 'snowdock'
           containers = {
             nodeapp = {
               image = imageName
-              publish = ["8000:80"]
+              publish = ['8000:80']
+              volumes = ['/blah']
             }
           }
         }
         api.run 'nodeapp'!
 
-        httpism.get "http://#(vip):8000"!.body.should.match r/^hi from/
-        should.exist(snowdock.host (config.hosts.vagrant).container('nodeapp').status()!)
+        httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
+        status = snowdock.host (config.hosts.vagrant).container('nodeapp').status()!
+        should.exist(status)
+        status.HostConfig.PortBindings.should.eql { '80/tcp' = [{ HostIp = '0.0.0.0', HostPort = '8000' }] }
+        status.VolumesRW.should.eql { '/blah' = true }
 
   describe 'api'
     api =
@@ -297,14 +300,14 @@ describe 'snowdock'
     }
 
   makeChangeToApp(version) =
-    fs.writeFile 'nodeapp/views/index.txt' "hi from <%= host %>, #(version)"!
+    fs.writeFile 'nodeapp/version.txt' "#(version)"!
 
   buildDockerImage (imageName: nil, dir: nil) =
     process.chdir "#(__dirname)/.."
     child_process.exec "docker build -t #(imageName) #(dir)" ^!
     child_process.exec "docker push #(imageName)" ^!
 
-  waitFor (n) backendsToRespond (host: nil, hostname: nil, responseRegex: nil, timeout: 5000)! =
+  waitFor (n) backendsToRespond (host: nil, hostname: nil, version: 1, timeout: 5000)! =
     promise @(result, error)
       setTimeout
         error(@new Error "failed to get reponses from all #(n) hosts")
@@ -314,12 +317,11 @@ describe 'snowdock'
 
       requestAHost(hosts) =
         body = nodeapp.get ''!.body
-        match = responseRegex.exec (body)
-        if (match)
-          hosts.(match.1) = true
+        if (body.message == 'hi from nodeapp' @and body.version == version)
+          hosts.(body.host) = true
           if (Object.keys(hosts).length < n)
             requestAHost (hosts)!
         else
-          error(@new Error "unexpected response from host: #(body)")
+          error(@new Error "unexpected response from host: #(JSON.stringify(body))")
 
       result(requestAHost {}!)
