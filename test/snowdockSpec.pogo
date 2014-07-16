@@ -106,6 +106,9 @@ describe 'snowdock' =>
       api.setConfig! (config)!
       api.before()!
 
+    afterEach
+      api.after()!
+
     it 'starts proxy'
       api.startProxy()!
       proxyShouldBeRunning()!
@@ -137,6 +140,18 @@ describe 'snowdock' =>
         console.log "waiting for backends"
         waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
 
+      it 'can start a website over ssh'
+        config2 = clone(config)
+        config2.hosts.vagrant.ssh = {
+          command = "ssh -i #(process.env.HOME)/.vagrant.d/insecure_private_key"
+          user = 'vagrant'
+        }
+        api.setConfig! (config2)
+
+        api.startWebsite 'nodeapp'!
+        console.log "waiting for backends"
+        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
+
       it 'can start, stop and start a website'
         api.startWebsite 'nodeapp'!
         waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
@@ -146,6 +161,15 @@ describe 'snowdock' =>
 
         api.startWebsite 'nodeapp'!
         waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
+
+      it 'can start and remove a website'
+        api.startWebsite 'nodeapp'!
+        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
+
+        api.removeWebsite 'nodeapp'!
+
+        httpism.get "http://#(vip)" (exceptions: false)!.statusCode.should.equal 400
+        findContainers(command: 'node_modules/.bin/pogo index.pogo')!.should.eql []
 
       context 'with no service interruption'
         monitor = nil
@@ -186,7 +210,7 @@ describe 'snowdock' =>
         api.startWebsite 'nodeapp'!
         waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
 
-        config2 = JSON.parse(JSON.stringify(config))
+        config2 = clone(config)
         config2.websites = {}
         api.setConfig! (config2)
         api.removeProxy()!
@@ -224,13 +248,17 @@ describe 'snowdock' =>
           clusterConfig := config
           cluster := snowdock.cluster(clusterConfig)
 
+        after() =
+          snowdock.close()!
+
         startProxy()! = cluster.startProxy()!
         removeProxy()! = cluster.removeProxy()!
+        stopProxy()! = cluster.stopProxy()!
         startWebsite(name)! = cluster.startWebsite(name)!
+        removeWebsite(name)! = cluster.removeWebsite(name)!
         stopWebsite(name)! = cluster.stopWebsite(name)!
         updateWebsite(name)! = cluster.updateWebsite(name)!
-        stopProxy()! = cluster.stopProxy()!
-        run(args, ...)! = cluster.run(args, ...)!
+        start(args, ...)! = cluster.start(args, ...)!
 
         setConfig(c) =
           clusterConfig := c
@@ -264,11 +292,13 @@ describe 'snowdock' =>
         before() =
           fs.writeFile "#(__dirname)/snowdock.json" (JSON.stringify(config)) ^!
 
+        after() = nil
+
         setConfig(c) =
           fs.writeFile "#(__dirname)/snowdock.json" (JSON.stringify(c)) ^!
       }
 
-      for each @(cmd) in ('startProxy stopProxy removeProxy startWebsite updateWebsite stopWebsite start stop'.split ' ')
+      for each @(cmd) in ('startProxy stopProxy removeProxy startWebsite updateWebsite stopWebsite removeWebsite start stop'.split ' ')
         @(cmd)@{
           commandLineCommand = cmd.replace r/([A-Z])/g @(l) @{ ' ' + l.toLowerCase() }.trim().split ' '
           api.(cmd) (args, ...)! = spawn "bin/snowdock" "-c" "#(__dirname)/snowdock.json" (commandLineCommand, ..., args, ...)!
@@ -330,3 +360,5 @@ describe 'snowdock' =>
           error(@new Error "unexpected response from host: #(JSON.stringify(body))")
 
       result(requestAHost {}!)
+
+  clone(object) = JSON.parse(JSON.stringify(object))

@@ -1,31 +1,41 @@
 Docker = require 'dockerode'
 _ = require 'underscore'
 redis = require 'redis'
+sshForward = require 'ssh-forward'
 
-connectToDocker(host) =
-  log.debug "connecting to docker '#('http://' + host.docker.host):#(host.docker.port)'"
-  @new Docker(host: 'http://' + host.docker.host, port: host.docker.port)
+connectToDocker(config) =
+  log.debug "connecting to docker '#('http://' + config.host):#(config.port)'"
+  @new Docker(host: 'http://' + config.host, port: config.port)
+
+exports.close() =
+  closeRedisConnections()!
+  sshTunnels.close()!
 
 redisClients = []
 
-exports.closeRedisConnections() =
+closeRedisConnections() =
   try
     [c <- redisClients, c.quit(^)!]
   catch (e)
     [c <- redisClients, c.end(^)!]
 
-connectToRedis(host) =
-  log.debug "connecting to redis '#(host.redis.host):#(host.redis.port)'"
-  client = redis.createClient(host.redis.port, host.redis.host)
+closeSshConnections() =
+  [c <- sshConnections, c.close()!]
+
+connectToRedis(config) =
+  log.debug "connecting to redis '#(config.host):#(config.port)'"
+  client = redis.createClient(config.port, config.host)
   redisClients.push(client)
   client
+
+sshConnections = []
 
 exports.cluster (config) =
   withLoadBalancers (block) =
     [
       hostKey <- Object.keys(config.hosts)
       hostConfig = config.hosts.(hostKey)
-      lb = exports.host(hostConfig).loadBalancer()
+      lb = exports.host(hostConfig).proxy()
       block(lb)!
     ]
 
@@ -50,25 +60,25 @@ exports.cluster (config) =
     startWebsite(name)! =
       [
         host <- hosts()
-        host.startWebsite! (config.websites.(name))
+        host.website (config.websites.(name)).start()!
       ]
 
     stopWebsite(name)! =
       [
         host <- hosts()
-        host.stopWebsite! (config.websites.(name))
+        host.website (config.websites.(name)).stop()!
       ]
 
     updateWebsite(name)! =
       [
         host <- hosts()
-        host.updateWebsite! (config.websites.(name))
+        host.website (config.websites.(name)).update()!
       ]
 
     removeWebsite(name)! =
       [
         host <- hosts()
-        host.removeWebsite! (config.websites.(name))
+        host.website (config.websites.(name)).remove()!
       ]
 
     startProxy()! =
@@ -90,13 +100,26 @@ exports.cluster (config) =
   }
 
 exports.host (host) =
+  connectToSsh(service)! =
+    if (host.ssh)
+      port = sshTunnels.open! {
+        host = service.host
+        port = service.port
+        command = host.ssh.command
+        user = host.ssh.user
+      }
+      
+      { host = 'localhost', port = port }
+    else
+      service
+
   docker =
     dockerClient = nil
     cachedDocker()! =
       if (dockerClient)
         dockerClient
       else
-        dockerClient := connectToDocker(host)
+        dockerClient := connectToDocker(connectToSsh(host.docker)!)
 
   redisDb =
     client = nil
@@ -104,139 +127,14 @@ exports.host (host) =
       if (client)
         client
       else
-        client := connectToRedis(host)
+        client := connectToRedis(connectToSsh(host.redis)!)
         client.on 'error' @{}
         client
 
-  portBinding (port) =
-    match = r/((([0-9.]*):)?(\d+):)?(\d+)/.exec(port)
-    if (match)
-      {
-        hostIp = match.3
-        hostPort = match.4
-        containerPort = match.5
-      }
-    else
-      @throw @new Error "expected port binding to be \"[[host-ip:]host-port:]container-port\", but got #(port)"
-
-  (s) toArray =
-    if (s :: Array)
-      s
-    else if (s)
-      [s]
-    else
-      []
-
-  volumes(vols) =
-    v = {}
-
-    for each @(vol) in ((vols) toArray)
-      split = vol.split ':'
-      
-      v.(split.0) =
-        if (split.1)
-          mapping = {}
-          mapping.(split.1) = split.2 @or 'rw'
-          mapping
-        else
-          {}
-
-    v
-
-  portBindings (ports, create: false) =
-    if (ports)
-      bindings = {}
-
-      for each @(port) in ((ports) toArray)
-        binding = portBinding(port)
-        bindings."#(binding.containerPort)/tcp" =
-          if (create)
-            {}
-          else
-            [{HostPort = binding.hostPort, HostIp = binding.hostIp}]
-
-      bindings
-
   {
-    startWebsite! (websiteConfig) =
-      lb = self.loadBalancer()
-      existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
+    internalIp = host.internalIp
 
-      if (existingBackends.length > 0)
-        [
-          b <- existingBackends
-          self.container(b.container).start()!
-        ]
-      else
-        self.ensureImagePresent! (websiteConfig.container.image)
-        backends = self.startBackends! (websiteConfig)
-        self.waitForWebContainersToStart()!
-        lb.addBackends! (backends, hostname: websiteConfig.hostname)
-        lb.setBackends! (backends, hostname: websiteConfig.hostname)
-        backends
-
-    stopWebsite! (websiteConfig) =
-      lb = self.loadBalancer()
-      existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
-
-      if (existingBackends.length > 0)
-        [
-          b <- existingBackends
-          self.container(b.container).stop()!
-        ]
-
-    updateWebsite! (websiteConfig) =
-      log.debug "updating website '#(websiteConfig.hostname)'"
-      lb = self.loadBalancer()
-
-      existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
-
-      self.pullImage(websiteConfig.container.image)!
-
-      backends = self.startBackends! (websiteConfig)
-
-      self.waitForWebContainersToStart()!
-
-      log.debug "setting up backends"
-      lb.addBackends! (backends, hostname: websiteConfig.hostname)
-      lb.removeBackends! (existingBackends, hostname: websiteConfig.hostname)
-      lb.setBackends! (backends, hostname: websiteConfig.hostname)
-
-      log.debug "removing backends"
-      [
-        b <- existingBackends
-        self.container(b.container).remove(force: true)!
-      ]
-
-      log.debug "deployed website"
-
-    waitForWebContainersToStart()! =
-      log.debug "waiting 2000"
-      setTimeout ^ 2000!
-
-    startBackends! (websiteConfig) =
-      [
-        i <- [1..websiteConfig.nodes]
-        container = self.runContainer (websiteConfig.container)!
-        port = container.status()!.HostConfig.PortBindings."#(portBinding(websiteConfig.container.publish.0).containerPort)/tcp".0.HostPort
-        {port = port, container = container.name, host = host.internalIp}
-      ]
-
-    removeWebsite! (hostname) =
-      log.debug "removing website '#(hostname)'"
-      lb = self.loadBalancer()
-
-      existingBackends = lb.backendsByHostname(hostname)!
-
-      lb.removeBackends! (existingBackends, hostname: hostname)
-      lb.setBackends! ([], hostname: hostname)
-
-      [
-        b <- existingBackends
-        self.container(b.container).remove(force: true)!
-      ]
-      
-    loadBalancer() = loadBalancer(self, docker, redisDb)
+    proxy() = proxy(self, docker, redisDb)
 
     runContainer (containerConfig) =
       log.debug "running container with image '#(containerConfig.image)'"
@@ -262,6 +160,7 @@ exports.host (host) =
 
     container(name) = container(name, self, docker)
     image(name) = image(name, self, docker)
+    website(websiteConfig) = website(websiteConfig, self, docker)
 
     status(name) =
       self.container(name).status()!
@@ -353,7 +252,88 @@ image (name, host, docker) =
     name = name
   }
 
-loadBalancer (host, docker, redisDb) =
+website (websiteConfig, host, docker) = {
+  start! () =
+    lb = host.proxy()
+    existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
+
+    if (existingBackends.length > 0)
+      [
+        b <- existingBackends
+        host.container(b.container).start()!
+      ]
+    else
+      host.ensureImagePresent! (websiteConfig.container.image)
+      backends = self.startBackends! ()
+      self.waitForWebContainersToStart()!
+      lb.addBackends! (backends, hostname: websiteConfig.hostname)
+      lb.setBackends! (backends, hostname: websiteConfig.hostname)
+      backends
+
+  stop! () =
+    lb = host.proxy()
+    existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
+
+    if (existingBackends.length > 0)
+      [
+        b <- existingBackends
+        host.container(b.container).stop()!
+      ]
+
+  update! () =
+    log.debug "updating website '#(websiteConfig.hostname)'"
+    lb = host.proxy()
+
+    existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
+
+    host.pullImage(websiteConfig.container.image)!
+
+    backends = self.startBackends! ()
+
+    self.waitForWebContainersToStart()!
+
+    log.debug "setting up backends"
+    lb.addBackends! (backends, hostname: websiteConfig.hostname)
+    lb.removeBackends! (existingBackends, hostname: websiteConfig.hostname)
+    lb.setBackends! (backends, hostname: websiteConfig.hostname)
+
+    log.debug "removing backends"
+    [
+      b <- existingBackends
+      host.container(b.container).remove(force: true)!
+    ]
+
+    log.debug "deployed website"
+
+  remove! () =
+    hostname = websiteConfig.hostname
+    log.debug "removing website '#(hostname)'"
+    lb = host.proxy()
+
+    existingBackends = lb.backendsByHostname(hostname)!
+
+    lb.removeBackends! (existingBackends, hostname: hostname)
+    lb.setBackends! ([], hostname: hostname)
+
+    [
+      b <- existingBackends
+      host.container(b.container).remove(force: true)!
+    ]
+
+  waitForWebContainersToStart()! =
+    log.debug "waiting 2000"
+    setTimeout ^ 2000!
+
+  startBackends! () =
+    [
+      i <- [1..websiteConfig.nodes]
+      container = host.runContainer (websiteConfig.container)!
+      port = container.status()!.HostConfig.PortBindings."#(portBinding(websiteConfig.container.publish.0).containerPort)/tcp".0.HostPort
+      {port = port, container = container.name, host = host.internalIp}
+    ]
+}
+
+proxy (host, docker, redisDb) =
   hipacheName = 'snowdock-hipache'
 
   frontendKey (hostname) = "frontend:#(hostname)"
@@ -388,7 +368,7 @@ loadBalancer (host, docker, redisDb) =
         [
           key <- redisDb()!.keys(backendKey '*', ^)!
           hostname = key.split ':'.1
-          host.removeWebsite(hostname)!
+          host.website { hostname = hostname }.remove()!
         ]
 
       host.container(hipacheName).remove(force: true)!
@@ -431,3 +411,87 @@ loadBalancer (host, docker, redisDb) =
 log = {
   debug (msg, ...) = console.log(msg, ...)
 }
+
+portBindings (ports, create: false) =
+  if (ports)
+    bindings = {}
+
+    for each @(port) in ((ports) toArray)
+      binding = portBinding(port)
+      bindings."#(binding.containerPort)/tcp" =
+        if (create)
+          {}
+        else
+          [{HostPort = binding.hostPort, HostIp = binding.hostIp}]
+
+    bindings
+
+portBinding (port) =
+  match = r/((([0-9.]*):)?(\d+):)?(\d+)/.exec(port)
+  if (match)
+    {
+      hostIp = match.3
+      hostPort = match.4
+      containerPort = match.5
+    }
+  else
+    @throw @new Error "expected port binding to be \"[[host-ip:]host-port:]container-port\", but got #(port)"
+
+(s) toArray =
+  if (s :: Array)
+    s
+  else if (s)
+    [s]
+  else
+    []
+
+volumes(vols) =
+  v = {}
+
+  for each @(vol) in ((vols) toArray)
+    split = vol.split ':'
+    
+    v.(split.0) =
+      if (split.1)
+        mapping = {}
+        mapping.(split.1) = split.2 @or 'rw'
+        mapping
+      else
+        {}
+
+  v
+
+sshTunnels =
+  tunnels = []
+  port = 42468
+  tunnelCache = {}
+
+  {
+    open(config)! =
+      key = "#(config.host):#(config.port):#(config.user):#(config.command)"
+
+      if (@not tunnelCache.(key))
+        log.debug "opening SSH tunnel to #(config.host):#(config.port) on #(port)"
+        tunnel = sshForward! {
+          hostname =
+            if (config.user)
+              "#(config.user)@#(config.host)"
+            else
+              config.host
+
+          localPort = port
+          remoteHost = 'localhost'
+          remotePort = config.port
+          command = config.command
+        }
+        tunnelCache.(key) = port
+        tunnels.push(tunnel)
+        port := port + 1
+      else
+        log.debug "using cached SSH tunnel to #(config.host):#(config.port) on #(port)"
+
+      tunnelCache.(key)
+
+    close()! =
+      [t <- tunnels, @{ console.log 'closing tunnel', t.close()! }()!]
+  }
