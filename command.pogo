@@ -9,8 +9,16 @@ console.log "reading config file: #(filename)"
 cluster = snowdock.cluster(JSON.parse(fs.readFile (filename, 'utf-8', ^)!))
 
 try
-  if (command == 'install')
-    cluster.install()!
+  if (command == 'start')
+    container = argv._.shift()
+
+    if (container == 'all')
+    else if (container == 'proxy')
+      cluster.startProxy()!
+    else if (container == 'website')
+      cluster.startWebsite(argv._.shift())!
+    else
+      cluster.start(container)!
   else if (command == 'uninstall')
     cluster.uninstall()!
   else if (command == 'deploy')

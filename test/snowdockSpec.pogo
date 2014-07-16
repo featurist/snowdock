@@ -13,17 +13,19 @@ retry = require '../../../VCP.API/IMD.VCP.API/ui/common/retry'
 redis = require 'redis'
 waitForSocket = require 'waitforsocket'
 
-describe 'snowdock'
+describe 'snowdock' =>
+  min = (n) mins = n * 60 * 1000
+
+  self.timeout (5 mins)
+
   dockerRegistryDomain = nil
   dockerHost = nil
   dockerPort = nil
   imageName = nil
   vip = nil
-  min = (n) mins = n * 60 * 1000
   config = nil
 
-  beforeEach =>
-    self.timeout (5 mins)
+  beforeEach
 
     makeChangeToApp(1)!
     vip := vagrantIp()!
@@ -82,7 +84,7 @@ describe 'snowdock'
       cont.remove {force = true} ^!
     ]
 
-  shouldBeRunning(hipachePort: 80)! =
+  proxyShouldBeRunning(hipachePort: 80)! =
     retry(timeout: 10000)!
       response = httpism.get "http://#(vip):#(hipachePort)/" (exceptions: false)!
       response.statusCode.should.equal 400
@@ -93,7 +95,7 @@ describe 'snowdock'
       hipacheRedis.on 'error' @{}
       hipacheRedis.info(^)!
 
-  shouldNotBeRunning()! =
+  proxyShouldNotBeRunning()! =
     httpism.get "http://#(vip)/" (exceptions: false).should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
     hipacheRedis = redis.createClient(6379, vip)
     hipacheRedis.on 'error' @{}
@@ -101,41 +103,48 @@ describe 'snowdock'
 
   describeApi (api) =
     beforeEach
+      api.setConfig! (config)!
       api.before()!
 
-    it 'installs and runs load balancer' =>
-      self.timeout (5 mins)
-      api.install()!
-      shouldBeRunning()!
+    it 'installs and runs proxy'
+      api.startProxy()!
+      proxyShouldBeRunning()!
 
-    it "doesn't have the load balancer running"
-      shouldNotBeRunning()!
+    it "doesn't have the proxy running"
+      proxyShouldNotBeRunning()!
 
-    it 'can start the loadbalancer with container options' =>
-      self.timeout (5 mins)
-
-      api.setConfig {
+    it 'can start the proxy with container options'
+      api.setConfig! {
         hosts = config.hosts
-        loadbalancer = {
-          publish = ['8000:80', '6379:6379']
+        websites = {
+          proxy = {
+            publish = ['8000:80', '6379:6379']
+          }
         }
       }
-      api.install()!
+      api.startProxy()!
 
-      shouldBeRunning(hipachePort: 8000)!
+      proxyShouldBeRunning(hipachePort: 8000)!
 
     context 'when it is installed'
-      beforeEach =>
-        self.timeout (5 mins)
-        api.install()!
+      beforeEach
+        api.startProxy()!
         console.log "waiting for socket: #(vip):#(6379)"
         waitForSocket(vip, 6379, timeout: 2000)!
 
-      it 'can create a web cluster' =>
-        self.timeout (5 mins)
-
-        api.deploy()!
+      it 'can start a website'
+        api.startWebsite 'nodeapp'!
         console.log "waiting for backends"
+        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
+
+      it 'can start, stop and start a website'
+        api.startWebsite 'nodeapp'!
+        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
+
+        api.stopWebsite 'nodeapp'!
+        httpism.get "http://#(vip)" (exceptions: false)!.statusCode.should.equal 400
+
+        api.startWebsite 'nodeapp'!
         waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
 
       context 'with no service interruption'
@@ -150,66 +159,60 @@ describe 'snowdock'
           monitor.totalInterruptionTime.should.equal 0
           should.not.exist(monitor.error)
 
-        it 'can update a web cluster' =>
-          self.timeout (5 mins)
-
-          api.deploy()!
+        it 'can update a website'
+          api.updateWebsite 'nodeapp'!
           waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
 
           makeChangeToApp(2)!
           buildDockerImage (imageName: imageName, dir: 'nodeapp')!
 
-          api.deploy()!
+          api.updateWebsite 'nodeapp'!
           waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', version: 2)!
 
           makeChangeToApp(3)!
           buildDockerImage (imageName: imageName, dir: 'nodeapp')!
 
-          api.deploy()!
+          api.updateWebsite 'nodeapp'!
           waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', version: 3)!
 
-      it 'can stop the load balancer and start it again' =>
-        self.timeout (5 * 60 * 1000)
-        api.stop()!
-        shouldNotBeRunning()!
+      it 'can stop the proxy and start it again'
+        api.stopProxy()!
+        proxyShouldNotBeRunning()!
 
-        api.start()!
-        shouldBeRunning()!
+        api.startProxy()!
+        proxyShouldBeRunning()!
 
-      it 'uninstalls the load balancer and all containers' =>
-        self.timeout (5 * 60 * 1000)
-
-        api.deploy()!
+      it 'removes the proxy and all website containers'
+        api.startWebsite 'nodeapp'!
         waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
 
         config2 = JSON.parse(JSON.stringify(config))
-        config2.websites = []
-        api.setConfig(config2)
-        api.uninstall()!
+        config2.websites = {}
+        api.setConfig! (config2)
+        api.removeProxy()!
 
         findContainers(command: 'node_modules/.bin/pogo index.pogo')!.should.eql []
         findContainers(imageName: 'hipache')!.should.eql []
 
-      it 'can run arbitrary containers' =>
-        self.timeout (5 mins)
-
-        api.setConfig {
-          hosts = config.hosts
-          containers = {
-            nodeapp = {
-              image = imageName
-              publish = ['8000:80']
-              volumes = ['/blah']
+      describe 'containers'
+        it 'can start a container'
+          api.setConfig! {
+            hosts = config.hosts
+            containers = {
+              nodeapp = {
+                image = imageName
+                publish = ['8000:80']
+                volumes = ['/blah']
+              }
             }
           }
-        }
-        api.run 'nodeapp'!
+          api.run 'nodeapp'!
 
-        httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
-        status = snowdock.host (config.hosts.vagrant).container('nodeapp').status()!
-        should.exist(status)
-        status.HostConfig.PortBindings.should.eql { '80/tcp' = [{ HostIp = '0.0.0.0', HostPort = '8000' }] }
-        status.VolumesRW.should.eql { '/blah' = true }
+          httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
+          status = snowdock.host (config.hosts.vagrant).container('nodeapp').status()!
+          should.exist(status)
+          status.HostConfig.PortBindings.should.eql { '80/tcp' = [{ HostIp = '0.0.0.0', HostPort = '8000' }] }
+          status.VolumesRW.should.eql { '/blah' = true }
 
   describe 'api'
     api =
@@ -221,11 +224,12 @@ describe 'snowdock'
           clusterConfig := config
           cluster := snowdock.cluster(clusterConfig)
 
-        install()! = cluster.install()!
-        uninstall()! = cluster.uninstall()!
-        deploy()! = cluster.deployWebsites()!
-        start()! = cluster.start()!
-        stop()! = cluster.stop()!
+        startProxy()! = cluster.startProxy()!
+        removeProxy()! = cluster.removeProxy()!
+        startWebsite(name)! = cluster.startWebsite(name)!
+        stopWebsite(name)! = cluster.stopWebsite(name)!
+        updateWebsite(name)! = cluster.updateWebsite(name)!
+        stopProxy()! = cluster.stopProxy()!
         run(args, ...)! = cluster.run(args, ...)!
 
         setConfig(c) =
@@ -264,9 +268,10 @@ describe 'snowdock'
           fs.writeFile "#(__dirname)/snowdock.json" (JSON.stringify(c)) ^!
       }
 
-      for each @(cmd) in ('install uninstall deploy start stop run'.split ' ')
+      for each @(cmd) in ('startProxy removeProxy deploy start stop run'.split ' ')
         @(cmd)@{
-          api.(cmd) (args, ...)! = spawn "bin/snowdock" (cmd) "-c" "#(__dirname)/snowdock.json" (args) ...!
+          commandLineCommand = cmd.replace r/([A-Z])/g @(l) @{ ' ' + l.toLowerCase() }.trim()
+          api.(cmd) (args, ...)! = spawn "bin/snowdock" (commandLineCommand) "-c" "#(__dirname)/snowdock.json" (args) ...!
         }(cmd)
 
       api

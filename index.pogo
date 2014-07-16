@@ -47,27 +47,37 @@ exports.cluster (config) =
     ]
     
   {
-    deployWebsites()! =
-      withWebsites! @(host, websiteConfig)
-        host.deployWebsite! (websiteConfig)
+    startWebsite(name)! =
+      [
+        host <- hosts()
+        host.startWebsite! (config.websites.(name))
+      ]
+
+    stopWebsite(name)! =
+      [
+        host <- hosts()
+        host.stopWebsite! (config.websites.(name))
+      ]
+
+    updateWebsite(name)! =
+      [
+        host <- hosts()
+        host.updateWebsite! (config.websites.(name))
+      ]
 
     removeWebsites()! =
       withWebsites! @(host, websiteConfig)
         host.removeWebsite! (websiteConfig.hostname)
 
-    install()! =
+    startProxy()! =
       withLoadBalancers! @(lb)
-        lb.install(config.loadbalancer)!
+        lb.start(config.websites.proxy)!
 
-    uninstall()! =
+    removeProxy()! =
       withLoadBalancers! @(lb)
-        lb.uninstall()!
+        lb.remove()!
 
-    start()! =
-      withLoadBalancers! @(lb)
-        lb.start()!
-
-    stop()! =
+    stopProxy()! =
       withLoadBalancers! @(lb)
         lb.stop()!
 
@@ -146,23 +156,44 @@ exports.host (host) =
       bindings
 
   {
-    deployWebsite! (websiteConfig) =
-      log.debug "deploying website '#(websiteConfig.hostname)'"
+    startWebsite! (websiteConfig) =
+      lb = self.loadBalancer()
+      existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
+
+      if (existingBackends.length > 0)
+        [
+          b <- existingBackends
+          self.container(b.container).start()!
+        ]
+      else
+        self.ensureImagePresent! (websiteConfig.container.image)
+        backends = self.startBackends! (websiteConfig)
+        self.waitForWebContainersToStart()!
+        lb.addBackends! (backends, hostname: websiteConfig.hostname)
+        lb.setBackends! (backends, hostname: websiteConfig.hostname)
+        backends
+
+    stopWebsite! (websiteConfig) =
+      lb = self.loadBalancer()
+      existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
+
+      if (existingBackends.length > 0)
+        [
+          b <- existingBackends
+          self.container(b.container).stop()!
+        ]
+
+    updateWebsite! (websiteConfig) =
+      log.debug "updating website '#(websiteConfig.hostname)'"
       lb = self.loadBalancer()
 
       existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
 
       self.pullImage(websiteConfig.container.image)!
 
-      backends = [
-        i <- [1..websiteConfig.nodes]
-        container = self.runContainer (websiteConfig.container)!
-        port = container.status()!.HostConfig.PortBindings."#(portBinding(websiteConfig.container.publish.0).containerPort)/tcp".0.HostPort
-        {port = port, container = container.name, host = host.internalIp}
-      ]
+      backends = self.startBackends! (websiteConfig)
 
-      log.debug "waiting 2000"
-      setTimeout ^ 2000!
+      self.waitForWebContainersToStart()!
 
       log.debug "setting up backends"
       lb.addBackends! (backends, hostname: websiteConfig.hostname)
@@ -176,6 +207,18 @@ exports.host (host) =
       ]
 
       log.debug "deployed website"
+
+    waitForWebContainersToStart()! =
+      log.debug "waiting 2000"
+      setTimeout ^ 2000!
+
+    startBackends! (websiteConfig) =
+      [
+        i <- [1..websiteConfig.nodes]
+        container = self.runContainer (websiteConfig.container)!
+        port = container.status()!.HostConfig.PortBindings."#(portBinding(websiteConfig.container.publish.0).containerPort)/tcp".0.HostPort
+        {port = port, container = container.name, host = host.internalIp}
+      ]
 
     removeWebsite! (hostname) =
       log.debug "removing website '#(hostname)'"
@@ -220,6 +263,10 @@ exports.host (host) =
 
     status(name) =
       self.container(name).status()!
+
+    ensureImagePresent! (imageName) =
+      if (@not self.image(imageName).status()!)
+        self.pullImage! (imageName)
 
     pullImage (imageName)! =
       promise! @(result, error)
@@ -266,6 +313,10 @@ container (name, host, docker) =
     start()! =
       log.debug "starting container '#(name)'"
       docker()!.getContainer(name).start(^)!
+
+    stop()! =
+      log.debug "stopping container '#(name)'"
+      docker()!.getContainer(name).stop(^)!
 
     isRunning()! =
       h = self.status()!
@@ -314,7 +365,7 @@ loadBalancer (host, docker, redisDb) =
     isRunning()! =
       host.container(hipacheName).isRunning()!
 
-    install(config) =
+    start(config) =
       if (@not self.isInstalled()!)
         host.runContainer! (_.extend {
           image = 'hipache'
@@ -325,19 +376,12 @@ loadBalancer (host, docker, redisDb) =
         if (@not self.isRunning()!)
           host.container(hipacheName).start()!
 
-    start() =
-      if (@not self.isInstalled()!)
-        throw (new (Error "not installed"))
-      else
-        if (@not self.isRunning()!)
-          host.container(hipacheName).start()!
-
     stop() =
       if (self.isRunning()!)
         h = docker()!.getContainer(hipacheName)
         h.stop(^)!
 
-    uninstall() =
+    remove() =
       if (self.isRunning()!)
         [
           key <- redisDb()!.keys(backendKey '*', ^)!
