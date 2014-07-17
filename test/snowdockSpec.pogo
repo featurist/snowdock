@@ -15,6 +15,7 @@ waitForSocket = require 'waitforsocket'
 
 describe 'snowdock' =>
   min = (n) mins = n * 60 * 1000
+  sec = (n) secs = n * 1000
 
   self.timeout (5 mins)
 
@@ -69,7 +70,7 @@ describe 'snowdock' =>
   findContainers(imageName: nil, command: nil) =
     docker = @new Docker(host: dockerHost, port: dockerPort)
     [
-      c <- docker.listContainers ^!
+      c <- docker.listContainers { all = true } ^!
       if (imageName)
         new (RegExp "^#(imageName):?").test(c.Image)
       else if (command)
@@ -106,7 +107,8 @@ describe 'snowdock' =>
       api.setConfig! (config)!
       api.before()!
 
-    afterEach
+    afterEach =>
+      self.timeout (30 secs)
       api.after()!
 
     it 'starts proxy'
@@ -132,12 +134,10 @@ describe 'snowdock' =>
     context 'when it is installed'
       beforeEach
         api.startProxy()!
-        console.log "waiting for socket: #(vip):#(6379)"
         waitForSocket(vip, 6379, timeout: 2000)!
 
       it 'can start a website'
         api.startWebsite 'nodeapp'!
-        console.log "waiting for backends"
         waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
 
       it 'can start a website over ssh'
@@ -149,7 +149,6 @@ describe 'snowdock' =>
         api.setConfig! (config2)
 
         api.startWebsite 'nodeapp'!
-        console.log "waiting for backends"
         waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
 
       it 'can start, stop and start a website'
@@ -219,7 +218,7 @@ describe 'snowdock' =>
         findContainers(imageName: 'hipache')!.should.eql []
 
       describe 'containers'
-        it 'can start a container'
+        beforeEach
           api.setConfig! {
             hosts = config.hosts
             containers = {
@@ -230,6 +229,8 @@ describe 'snowdock' =>
               }
             }
           }
+
+        it 'can start a container'
           api.start 'nodeapp'!
 
           httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
@@ -237,6 +238,46 @@ describe 'snowdock' =>
           should.exist(status)
           status.HostConfig.PortBindings.should.eql { '80/tcp' = [{ HostIp = '0.0.0.0', HostPort = '8000' }] }
           status.VolumesRW.should.eql { '/blah' = true }
+
+        it 'can start, stop and start a container'
+          api.start 'nodeapp'!
+          httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
+          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
+
+          api.stop 'nodeapp'!
+          httpism.get "http://#(vip):8000/".should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
+          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
+
+          api.start 'nodeapp'!
+          httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
+          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
+
+        it 'update a container'
+          api.start 'nodeapp'!
+          firstBody = httpism.get "http://#(vip):8000"!.body
+          firstBody.message.should.equal 'hi from nodeapp'
+          firstBody.version.should.equal 1
+          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
+
+          makeChangeToApp(2)!
+          buildDockerImage (imageName: imageName, dir: 'nodeapp')!
+
+          api.update 'nodeapp'!
+          secondBody = httpism.get "http://#(vip):8000"!.body
+          secondBody.message.should.equal 'hi from nodeapp'
+          secondBody.version.should.equal 2
+          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
+
+        it 'remove a container'
+          api.start 'nodeapp'!
+          firstBody = httpism.get "http://#(vip):8000"!.body
+          firstBody.message.should.equal 'hi from nodeapp'
+          firstBody.version.should.equal 1
+          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
+
+          api.remove 'nodeapp'!
+          httpism.get "http://#(vip):8000/".should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
+          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 0
 
   describe 'api'
     api =
@@ -258,7 +299,10 @@ describe 'snowdock' =>
         removeWebsite(name)! = cluster.removeWebsite(name)!
         stopWebsite(name)! = cluster.stopWebsite(name)!
         updateWebsite(name)! = cluster.updateWebsite(name)!
-        start(args, ...)! = cluster.start(args, ...)!
+        start(name)! = cluster.start(name)!
+        update(name)! = cluster.update(name)!
+        stop(name)! = cluster.stop(name)!
+        remove(name)! = cluster.remove(name)!
 
         setConfig(c) =
           clusterConfig := c
@@ -298,7 +342,7 @@ describe 'snowdock' =>
           fs.writeFile "#(__dirname)/snowdock.json" (JSON.stringify(c)) ^!
       }
 
-      for each @(cmd) in ('startProxy stopProxy removeProxy startWebsite updateWebsite stopWebsite removeWebsite start stop'.split ' ')
+      for each @(cmd) in ('startProxy stopProxy removeProxy startWebsite updateWebsite stopWebsite removeWebsite start update stop remove'.split ' ')
         @(cmd)@{
           commandLineCommand = cmd.replace r/([A-Z])/g @(l) @{ ' ' + l.toLowerCase() }.trim().split ' '
           api.(cmd) (args, ...)! = spawn "bin/snowdock" "-c" "#(__dirname)/snowdock.json" (commandLineCommand, ..., args, ...)!

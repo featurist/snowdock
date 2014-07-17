@@ -4,7 +4,10 @@
   "description": "automation of website deployment with docker",
   "main": "index.js",
   "directories": {
-    "test": "test"
+    "bin": "bin"
+  },
+  "bin": {
+    "snowdock": "bin/snowdock"
   },
   "dependencies": {
     "bluebird": "^2.2.1",

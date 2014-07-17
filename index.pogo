@@ -14,10 +14,15 @@ exports.close() =
 redisClients = []
 
 closeRedisConnections() =
-  try
-    [c <- redisClients, c.quit(^)!]
-  catch (e)
-    [c <- redisClients, c.end(^)!]
+  [
+    c <- redisClients
+    try
+      c.quit(^)!
+    catch (e)
+      c.end(^)!
+  ]
+
+  redisClients := []
 
 closeSshConnections() =
   [c <- sshConnections, c.close()!]
@@ -96,7 +101,18 @@ exports.cluster (config) =
     start(name)! =
       containerConfig = config.containers.(name)
 
-      [host <- hosts(), host.runContainer (_.extend({name = name}, containerConfig))!]
+      [host <- hosts(), host.start (_.extend({name = name}, containerConfig))!]
+
+    update(name)! =
+      containerConfig = config.containers.(name)
+
+      [host <- hosts(), host.update (_.extend({name = name}, containerConfig))!]
+
+    stop(name)! =
+      [host <- hosts(), host.container(name).stop()!]
+
+    remove(name)! =
+      [host <- hosts(), host.container(name).remove(force: true)!]
   }
 
 exports.host (host) =
@@ -135,6 +151,21 @@ exports.host (host) =
     internalIp = host.internalIp
 
     proxy() = proxy(self, docker, redisDb)
+
+    start(containerConfig)! =
+      container = self.container(containerConfig.name)
+      if (container.status()!)
+        container.start()!
+      else
+        self.runContainer(containerConfig)!
+
+    update(containerConfig)! =
+      container = self.container(containerConfig.name)
+      if (container.status()!)
+        container.remove(force: true)!
+
+      self.pullImage(containerConfig.image)!
+      self.runContainer(containerConfig)!
 
     runContainer (containerConfig) =
       log.debug "running container with image '#(containerConfig.image)'"
@@ -485,7 +516,11 @@ sshTunnels =
           command = config.command
         }
         tunnelCache.(key) = port
-        tunnels.push(tunnel)
+        tunnels.push {
+          config = config
+          port = port
+          close() = tunnel.close()!
+        }
         port := port + 1
       else
         log.debug "using cached SSH tunnel to #(config.host):#(config.port) on #(port)"
@@ -493,5 +528,12 @@ sshTunnels =
       tunnelCache.(key)
 
     close()! =
-      [t <- tunnels, @{ console.log 'closing tunnel', t.close()! }()!]
+      [
+        t <- tunnels
+        @{
+          log.debug "closing SSH tunnel to #(t.config.host):#(t.config.port) on #(t.port)"
+          t.close()!
+        }()!
+      ]
+      tunnels := []
   }
