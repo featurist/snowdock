@@ -60,7 +60,7 @@ exports.cluster (config) =
       hostConfig = config.hosts.(hostKey)
       exports.host(hostConfig)
     ]
-    
+
   {
     startWebsite(name)! =
       [
@@ -174,6 +174,7 @@ exports.host (host) =
         Image = containerConfig.image
         name = containerConfig.name
         Volumes = volumes(containerConfig.volumes)
+        Env = environmentVariables(containerConfig.env)
       }
 
       if (@not self.image(containerConfig.image).status()!)
@@ -491,6 +492,13 @@ volumes(vols) =
         {}
 
   v
+
+environmentVariables(env) =
+  if (env)
+    [
+      key <- Object.keys(env)
+      "#(key)=#(env.(key))"
+    ]
 
 sshTunnels =
   tunnels = []

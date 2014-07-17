@@ -226,6 +226,7 @@ describe 'snowdock' =>
                 image = imageName
                 publish = ['8000:80']
                 volumes = ['/blah']
+                env = { PASSWORD = 'password123' }
               }
             }
           }
@@ -238,6 +239,7 @@ describe 'snowdock' =>
           should.exist(status)
           status.HostConfig.PortBindings.should.eql { '80/tcp' = [{ HostIp = '0.0.0.0', HostPort = '8000' }] }
           status.VolumesRW.should.eql { '/blah' = true }
+          status.Config.Env.should.contain 'PASSWORD=password123'
 
         it 'can start, stop and start a container'
           api.start 'nodeapp'!
