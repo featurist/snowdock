@@ -101,7 +101,10 @@ exports.cluster (config) =
     start(name)! =
       containerConfig = config.containers.(name)
 
-      [host <- hosts(), host.start (_.extend({name = name}, containerConfig))!]
+      if (containerConfig)
+        [host <- hosts(), host.start (_.extend({name = name}, containerConfig))!]
+      else
+        @throw @new Erorr "no such container defined #(name)"
 
     update(name)! =
       containerConfig = config.containers.(name)
@@ -124,7 +127,7 @@ exports.host (host) =
         command = host.ssh.command
         user = host.ssh.user
       }
-      
+
       { host = 'localhost', port = port }
     else
       service
@@ -161,14 +164,19 @@ exports.host (host) =
 
     update(containerConfig)! =
       container = self.container(containerConfig.name)
+
+      self.pullImage(containerConfig.image)!
+
       if (container.status()!)
         container.remove(force: true)!
 
-      self.pullImage(containerConfig.image)!
       self.runContainer(containerConfig)!
 
     runContainer (containerConfig) =
       log.debug "running container with image '#(containerConfig.image)'"
+
+      if (@not self.image(containerConfig.image).status()!)
+        self.pullImage(containerConfig.image)!
 
       createOptions = {
         Image = containerConfig.image
@@ -176,9 +184,6 @@ exports.host (host) =
         Volumes = volumes(containerConfig.volumes)
         Env = environmentVariables(containerConfig.env)
       }
-
-      if (@not self.image(containerConfig.image).status()!)
-        self.pullImage(containerConfig.image)!
 
       container = docker()!.createContainer(createOptions, ^)!
 
@@ -202,17 +207,40 @@ exports.host (host) =
         self.pullImage! (imageName)
 
     pullImage (imageName)! =
-      promise! @(result, error)
-        docker()!.pull (imageName) @(e, stream)
-          if (e)
-            error(e)
-          else
-            stream.setEncoding 'utf-8'
+      image = parseImageName(imageName)
 
-            stream.on 'end'
-              result()
+      if (image.fromImage.indexOf '/' != -1)
+        if (host.docker.auth)
+          log.debug "pulling image '#(imageName)' as user '#(host.docker.auth.username)'"
+        else
+          log.debug "pulling image '#(imageName)'"
 
-            stream.resume()
+        promise! @(result, error)
+          docker()!.createImage (host.docker.auth, image) @(e, stream)
+            if (e)
+              error(e)
+            else
+              stream.setEncoding 'utf-8'
+
+              stream.on 'data' @(data)
+                try
+                  obj = JSON.parse(data)
+                  if (obj.error)
+                    error(obj.error)
+                  else
+                    console.log(obj.status)
+                catch (e)
+                  console.log(data)
+                  nil
+
+              stream.on 'end'
+                result()
+
+              stream.resume()
+
+        log.debug "pulled image '#(imageName)'"
+      else
+        log.debug "not pulling local image '#(imageName)'"
 
       self.image(imageName)
   }
@@ -482,7 +510,7 @@ volumes(vols) =
 
   for each @(vol) in ((vols) toArray)
     split = vol.split ':'
-    
+
     v.(split.0) =
       if (split.1)
         mapping = {}
@@ -545,3 +573,16 @@ sshTunnels =
       ]
       tunnels := []
   }
+
+parseImageName(imageName) =
+  match = r/^(.*):([^\/:]*)$|^(.*)$/.exec(imageName)
+
+  if (match.4)
+    {
+      fromImage = match.1
+      tag = match.2
+    }
+  else
+    {
+      fromImage = match.3
+    }
