@@ -234,6 +234,8 @@ exports.host (host) =
                     console.log(data)
                     nil
 
+              stream.on ('error', error)
+
               stream.on 'end'
                 result()
 

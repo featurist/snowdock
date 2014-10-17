@@ -1,12 +1,34 @@
 argv = (require 'minimist')(process.argv.slice 2)
 snowdock = require './'
 fs = require 'fs'
+path = require 'path'
 
 command = argv._.shift()
 
 filename = argv.c @or argv.config @or 'snowdock.json'
 console.log "reading config file: #(filename)"
 cluster = snowdock.cluster(JSON.parse(fs.readFile (filename, 'utf-8', ^)!))
+
+help() =
+  console.log "usage: #(path.basename(process.argv.1)) COMMAND
+
+                 where COMMAND:
+
+                 start proxy
+                 start website WEBSITE
+                 start CONTAINER
+
+                 remove proxy
+                 remove website WEBSITE
+                 remove CONTAINER
+
+                 update website WEBSITE
+                 update CONTAINER
+
+                 stop proxy
+                 stop website WEBSITE
+                 stop CONTAINER
+               "
 
 try
   if (command == 'start')
@@ -43,8 +65,11 @@ try
       cluster.stopWebsite(argv._.shift())!
     else
       cluster.stop(stopContainer)!
+  else if (command == 'help')
+    help()
   else
     console.log "no such command: #(command)"
+    help()
 catch (e)
   console.log (e)
   process.exit(1)
