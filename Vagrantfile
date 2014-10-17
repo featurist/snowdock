@@ -16,15 +16,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   config.vm.provision :shell, inline: 'grep -q "$(cat host_id_rsa.pub)" ~vagrant/.ssh/authorized_keys || cat host_id_rsa.pub >> ~vagrant/.ssh/authorized_keys'
 
   config.vm.provision "docker" do |d|
-    d.run "shipyard/redis", args: '-t -d -p 6379:6379 --name shipyard_redis'
-    d.run "shipyard/router", args: '-t -d -p 80 --link shipyard_redis:redis --name shipyard_router'
-    d.run "shipyard/lb", args: '-t -d -p 80:80 --link shipyard_redis:redis --link shipyard_router:app_router --name shipyard_lb'
-    d.run "shipyard/db", args: '-t -d -p 5432 -e DB_NAME=shipyard -e DB_USER=shipyard -e DB_PASS=qwert --name shipyard_db'
-    d.run "shipyard/shipyard", args: '-t -d -p 8000:8000 --link shipyard_db:db --link shipyard_redis:redis --name shipyard -e ADMIN_PASS=shipyard -e DEBUG=$DEBUG --entrypoint /app/.docker/run.sh shipyard/shipyard app master-worker'
-
     d.run 'registry', args: '-p 5000:5000'
-
-    d.run "shipyard/agent", args: '-t -v /var/run/docker.sock:/docker.sock --net host -e URL=http://localhost:8000 -p 4500:4500'
   end
 
   config.vm.provision :file, source: 'docker.patch', destination: 'docker.patch'
@@ -39,9 +31,6 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # Create a forwarded port mapping which allows access to a specific port
   # within the machine from a port on the host machine. In the example below,
   # accessing "localhost:8080" will access port 80 on the guest machine.
-
-  # shipyard
-  config.vm.network "forwarded_port", guest: 8000, host: 8000
 
   # docker registry
   config.vm.network "forwarded_port", guest: 5000, host: 5000

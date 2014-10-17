@@ -9,7 +9,7 @@ child_process = require 'child_process'
 Docker = require 'dockerode'
 sshForward = require 'ssh-forward'
 snowdock = require '../index'
-retry = require '../../../VCP.API/IMD.VCP.API/ui/common/retry'
+retry = require 'trytryagain'
 redis = require 'redis'
 waitForSocket = require 'waitforsocket'
 
@@ -27,7 +27,6 @@ describe 'snowdock' =>
   config = nil
 
   beforeEach
-
     makeChangeToApp(1)!
     vip := vagrantIp()!
     dockerRegistryDomain := "#(vip):5000"
@@ -36,7 +35,7 @@ describe 'snowdock' =>
     imageName := "#(dockerRegistryDomain)/nodeapp"
 
     removeAllContainers(command: 'node_modules/.bin/pogo index.pogo')!
-    removeAllContainers(imageName: 'hipache')!
+    removeAllContainers(imageName: 'library/hipache')!
 
     config := {
       hosts = {
@@ -76,7 +75,7 @@ describe 'snowdock' =>
       else if (command)
         c.Command == command
 
-      cont = docker.getContainer (c.Id)
+      docker.getContainer (c.Id)
     ]
 
   removeAllContainers(opts) =
@@ -152,6 +151,8 @@ describe 'snowdock' =>
         waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
 
       it 'can start, stop and start a website'
+        self.timeout 60000
+
         api.startWebsite 'nodeapp'!
         waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
 
@@ -159,7 +160,7 @@ describe 'snowdock' =>
         httpism.get "http://#(vip)" (exceptions: false)!.statusCode.should.equal 400
 
         api.startWebsite 'nodeapp'!
-        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
+        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', timeout: 35000)!
 
       it 'can start and remove a website'
         api.startWebsite 'nodeapp'!
@@ -215,7 +216,7 @@ describe 'snowdock' =>
         api.removeProxy()!
 
         findContainers(command: 'node_modules/.bin/pogo index.pogo')!.should.eql []
-        findContainers(imageName: 'hipache')!.should.eql []
+        findContainers(imageName: 'library/hipache')!.should.eql []
 
       describe 'containers'
         beforeEach
@@ -234,12 +235,17 @@ describe 'snowdock' =>
         it 'can start a container'
           api.start 'nodeapp'!
 
-          httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
-          status = snowdock.host (config.hosts.vagrant).container('nodeapp').status()!
+          retry!
+            httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
+
+          container = snowdock.host (config.hosts.vagrant).container('nodeapp')
+          status = container.status()!
           should.exist(status)
-          status.HostConfig.PortBindings.should.eql { '80/tcp' = [{ HostIp = '0.0.0.0', HostPort = '8000' }] }
+          status.HostConfig.PortBindings.should.eql { '80/tcp' = [{ HostIp = '', HostPort = '8000' }] }
           status.VolumesRW.should.eql { '/blah' = true }
           status.Config.Env.should.contain 'PASSWORD=password123'
+          snowdock.host (config.hosts.vagrant).container('nodeapp').status()!
+          container.port(80)!.should.equal '8000'
 
         it 'can start, stop and start a container'
           api.start 'nodeapp'!
@@ -385,26 +391,30 @@ describe 'snowdock' =>
 
   buildDockerImage (imageName: nil, dir: nil) =
     process.chdir "#(__dirname)/.."
+    console.log "building #(imageName)"
     child_process.exec "docker build -t #(imageName) #(dir)" ^!
+    console.log "pushing #(imageName)"
     child_process.exec "docker push #(imageName)" ^!
 
   waitFor (n) backendsToRespond (host: nil, hostname: nil, version: 1, timeout: 5000)! =
     promise @(result, error)
-      setTimeout
-        error(@new Error "failed to get reponses from all #(n) hosts")
-      (timeout)
-
       nodeapp = httpism.api "http://#(host)/" (headers: {host = hostname})
 
-      requestAHost(hosts) =
-        body = nodeapp.get ''!.body
-        if (body.message == 'hi from nodeapp' @and body.version == version)
-          hosts.(body.host) = true
-          if (Object.keys(hosts).length < n)
-            requestAHost (hosts)!
-        else
-          error(@new Error "unexpected response from host: #(JSON.stringify(body))")
+      requestAHost(hosts, timeout) =
+        if (@new Date().getTime() < timeout)
+          body = nodeapp.get ''!.body
+          if (body.message == 'hi from nodeapp' @and body.version == version)
+            if (@not hosts.(body.host))
+              console.log "got response from #(body.host)"
 
-      result(requestAHost {}!)
+            hosts.(body.host) = true
+            if (Object.keys(hosts).length < n)
+              requestAHost (hosts, timeout)!
+          else
+            error(@new Error "unexpected response from host: #(JSON.stringify(body))")
+        else
+          error(@new Error "only got reponses from #(Object.keys(hosts).length) of #(n) hosts")
+
+      result(requestAHost ({}, @new Date ().getTime() + timeout)!)
 
   clone(object) = JSON.parse(JSON.stringify(object))

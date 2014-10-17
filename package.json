@@ -11,15 +11,9 @@
   },
   "dependencies": {
     "bluebird": "^2.2.1",
-    "chai": "^1.9.1",
-    "chai-as-promised": "^4.1.1",
-    "decking": "^0.0.18",
     "dockerode": "^2.0.0",
     "httpism": "^0.1.2",
-    "longjohn": "^0.2.4",
     "minimist": "^0.2.0",
-    "needle": "^0.7.2",
-    "pogo": "^0.8.7",
     "qo": "^0.2.1",
     "redis": "^0.10.3",
     "ssh-forward": "^0.3.0",
@@ -27,7 +21,10 @@
     "waitforsocket": "^0.1.1"
   },
   "devDependencies": {
-    "mocha": "^1.20.1"
+    "mocha": "^1.20.1",
+    "chai": "^1.9.1",
+    "chai-as-promised": "^4.1.1",
+    "pogo": "^0.8.7"
   },
   "scripts": {
     "test": "mocha test/**Spec.*",

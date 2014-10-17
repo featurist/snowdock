@@ -222,16 +222,17 @@ exports.host (host) =
             else
               stream.setEncoding 'utf-8'
 
-              stream.on 'data' @(data)
-                try
-                  obj = JSON.parse(data)
-                  if (obj.error)
-                    error(obj.error)
-                  else
-                    console.log(obj.status)
-                catch (e)
-                  console.log(data)
-                  nil
+              if (false)
+                stream.on 'data' @(data)
+                  try
+                    obj = JSON.parse(data)
+                    if (obj.error)
+                      error(obj.error)
+                    else
+                      console.log(obj.status)
+                  catch (e)
+                    console.log(data)
+                    nil
 
               stream.on 'end'
                 result()
@@ -256,6 +257,11 @@ container (name, host, docker) =
           nil
         else
           throw (e)
+
+    port(internalPort) =
+      port = self.status()!.NetworkSettings.Ports."#(internalPort)/tcp".0.HostPort
+      log.debug "port for container: #(name), #(internalPort)/tcp -> #(port)"
+      port
 
     name = name
 
@@ -317,18 +323,29 @@ website (websiteConfig, host, docker) = {
     lb = host.proxy()
     existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
 
-    if (existingBackends.length > 0)
-      [
-        b <- existingBackends
-        host.container(b.container).start()!
-      ]
-    else
-      host.ensureImagePresent! (websiteConfig.container.image)
-      backends = self.startBackends! ()
-      self.waitForWebContainersToStart()!
-      lb.addBackends! (backends, hostname: websiteConfig.hostname)
-      lb.setBackends! (backends, hostname: websiteConfig.hostname)
-      backends
+    backends =
+      if (existingBackends.length > 0)
+        containers = [
+          b <- existingBackends
+          host.container(b.container)
+        ]
+
+        [
+          container <- containers
+          container.start()!
+        ]
+
+        lb.removeBackends! (existingBackends, hostname: websiteConfig.hostname)
+
+        self.backends!(containers)
+      else
+        host.ensureImagePresent! (websiteConfig.container.image)
+        self.startBackends! ()
+
+    self.waitForWebContainersToStart()!
+    lb.addBackends! (backends, hostname: websiteConfig.hostname)
+    lb.setBackends! (backends, hostname: websiteConfig.hostname)
+    backends
 
   stop! () =
     lb = host.proxy()
@@ -339,6 +356,8 @@ website (websiteConfig, host, docker) = {
         b <- existingBackends
         host.container(b.container).stop()!
       ]
+
+    lb.setBackends! ([], hostname: websiteConfig.hostname)
 
   update! () =
     log.debug "updating website '#(websiteConfig.hostname)'"
@@ -384,17 +403,24 @@ website (websiteConfig, host, docker) = {
     log.debug "waiting 2000"
     setTimeout ^ 2000!
 
-  startBackends! () =
+  backends(containers) =
     [
-      i <- [1..websiteConfig.nodes]
-      container = host.runContainer (websiteConfig.container)!
-      port = container.status()!.HostConfig.PortBindings."#(portBinding(websiteConfig.container.publish.0).containerPort)/tcp".0.HostPort
+      container <- containers
+      port = container.port(portBinding(websiteConfig.container.publish.0).containerPort)!
       {port = port, container = container.name, host = host.internalIp}
+    ]
+    
+
+  startBackends! () =
+    self.backends! [
+      i <- [1..websiteConfig.nodes]
+      host.runContainer (websiteConfig.container)!
     ]
 }
 
 proxy (host, docker, redisDb) =
   hipacheName = 'snowdock-hipache'
+  hipacheImageName = 'library/hipache'
 
   frontendKey (hostname) = "frontend:#(hostname)"
   backendKey (hostname) = "backend:#(hostname)"
@@ -410,7 +436,7 @@ proxy (host, docker, redisDb) =
     start(config) =
       if (@not self.isInstalled()!)
         host.runContainer! (_.extend {
-          image = 'hipache'
+          image = hipacheImageName
           name = hipacheName
           publish = ['80:80', '6379:6379']
         } (config))
@@ -434,6 +460,7 @@ proxy (host, docker, redisDb) =
       host.container(hipacheName).remove(force: true)!
 
     addBackends(hosts, hostname: nil) =
+      log.debug "adding hosts: #([h <- hosts, "http://#(h.host):#(h.port)"].join ', ')"
       redis = redisDb()!
 
       len = redis.llen (frontendKey(hostname)) ^!
@@ -451,6 +478,7 @@ proxy (host, docker, redisDb) =
       [h <- redis.lrange (backendKey(hostname), 0, -1) ^!, JSON.parse(h)]
 
     removeBackends(hosts, hostname: nil) =
+      log.debug "removing hosts: #([h <- hosts, "http://#(h.host):#(h.port)"].join ', ')"
       redis = redisDb()!
 
       [
@@ -459,6 +487,7 @@ proxy (host, docker, redisDb) =
       ]
 
     setBackends(hosts, hostname: nil) =
+      log.debug "setting hosts: #([h <- hosts, "http://#(h.host):#(h.port)"].join ', ')"
       redis = redisDb()!
 
       redis.del(backendKey(hostname), ^)!
