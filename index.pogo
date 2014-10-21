@@ -1,7 +1,10 @@
 Docker = require 'dockerode'
+fs = require 'fs'
 _ = require 'underscore'
 redis = require 'redis'
 sshForward = require 'ssh-forward'
+substitute = require 'shellsubstitute'
+handlebars = require 'handlebars'
 
 connectToDocker(config) =
   log.debug "connecting to docker '#('http://' + config.host):#(config.port)'"
@@ -61,6 +64,14 @@ exports.cluster (config) =
       exports.host(hostConfig)
     ]
 
+  configForContainer(name) =
+    containerConfig = config.containers.(name)
+
+    if (containerConfig)
+      containerConfig
+    else
+      @throw @new Error "no such container defined #(name)"
+
   {
     startWebsite(name)! =
       [
@@ -99,16 +110,11 @@ exports.cluster (config) =
         lb.stop()!
 
     start(name)! =
-      containerConfig = config.containers.(name)
-
-      if (containerConfig)
-        [host <- hosts(), host.start (_.extend({name = name}, containerConfig))!]
-      else
-        @throw @new Erorr "no such container defined #(name)"
+      containerConfig = configForContainer(name)
+      [host <- hosts(), host.start (_.extend({name = name}, containerConfig))!]
 
     update(name)! =
-      containerConfig = config.containers.(name)
-
+      containerConfig = configForContainer(name)
       [host <- hosts(), host.update (_.extend({name = name}, containerConfig))!]
 
     stop(name)! =
@@ -116,6 +122,31 @@ exports.cluster (config) =
 
     remove(name)! =
       [host <- hosts(), host.container(name).remove(force: true)!]
+
+    status() =
+      statuses = [
+        hostKey <- Object.keys(config.hosts)
+        hostConfig = config.hosts.(hostKey)
+        host = exports.host(hostConfig)
+        {
+          name = hostKey
+          host = host
+          websites = [
+            websiteName <- Object.keys(config.websites)
+            websiteName != 'proxy'
+            website = config.websites.(websiteName)
+            {
+              name = websiteName
+              website = website
+              containers = host.website (website).status()!
+            }
+          ]
+        }
+      ]
+
+      statusTemplate = handlebars.compile(fs.readFile "#(__dirname)/status.hb" 'utf-8' ^!)
+
+      console.log(statusTemplate({ hosts = statuses }))
   }
 
 exports.host (host) =
@@ -349,6 +380,31 @@ website (websiteConfig, host, docker) = {
     lb.setBackends! (backends, hostname: websiteConfig.hostname)
     backends
 
+  status() =
+    console.log "in website status"
+    lb = host.proxy()
+    existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
+
+    console.log('existingBackends', existingBackends)
+
+    [
+      b <- existingBackends
+      status = host.container(b.container).status()!
+      {
+        port = b.port
+        host = b.host
+        publishedPorts = [
+          port <- Object.keys(status.NetworkSettings.Ports)
+          binding <- status.NetworkSettings.Ports.(port)
+          {
+            port = port
+            internalPort = binding.HostPort
+          }
+        ]
+        container = host.container(b.container).status()!
+      }
+    ]
+
   stop! () =
     lb = host.proxy()
     existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
@@ -556,7 +612,7 @@ environmentVariables(env) =
   if (env)
     [
       key <- Object.keys(env)
-      "#(key)=#(env.(key))"
+      "#(key)=#(substitute(env.(key), process.env))"
     ]
 
 sshTunnels =
@@ -570,29 +626,36 @@ sshTunnels =
 
       if (@not tunnelCache.(key))
         log.debug "opening SSH tunnel to #(config.host):#(config.port) on #(port)"
-        tunnel = sshForward! {
-          hostname =
-            if (config.user)
-              "#(config.user)@#(config.host)"
-            else
-              config.host
 
+        openPort() =
           localPort = port
-          remoteHost = 'localhost'
-          remotePort = config.port
-          command = config.command
-        }
-        tunnelCache.(key) = port
-        tunnels.push {
-          config = config
-          port = port
-          close() = tunnel.close()!
-        }
-        port := port + 1
+          port := port + 1
+          tunnel = sshForward! {
+            hostname =
+              if (config.user)
+                "#(config.user)@#(config.host)"
+              else
+                config.host
+
+            localPort = localPort
+            remoteHost = 'localhost'
+            remotePort = config.port
+            command = config.command
+          }
+
+          tunnels.push {
+            config = config
+            port = localPort
+            close() = tunnel.close()!
+          }
+
+          localPort
+
+        tunnelCache.(key) = openPort()
       else
         log.debug "using cached SSH tunnel to #(config.host):#(config.port) on #(port)"
 
-      tunnelCache.(key)
+      (tunnelCache.(key))!
 
     close()! =
       [

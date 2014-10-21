@@ -31,47 +31,50 @@ help() =
                "
 
 try
-  if (command == 'start')
-    startContainer = argv._.shift()
+  try
+    if (command == 'start')
+      startContainer = argv._.shift()
 
-    if (startContainer == 'proxy')
-      cluster.startProxy()!
-    else if (startContainer == 'website')
-      cluster.startWebsite(argv._.shift())!
-    else
-      cluster.start(startContainer)!
-  else if (command == 'remove')
-    removeContainer = argv._.shift()
+      if (startContainer == 'proxy')
+        cluster.startProxy()!
+      else if (startContainer == 'website')
+        cluster.startWebsite(argv._.shift())!
+      else
+        cluster.start(startContainer)!
+    else if (command == 'remove')
+      removeContainer = argv._.shift()
 
-    if (removeContainer == 'proxy')
-      cluster.removeProxy()!
-    else if (removeContainer == 'website')
-      cluster.removeWebsite(argv._.shift())!
-    else
-      cluster.remove(removeContainer)!
-  else if (command == 'update')
-    updateContainer = argv._.shift()
+      if (removeContainer == 'proxy')
+        cluster.removeProxy()!
+      else if (removeContainer == 'website')
+        cluster.removeWebsite(argv._.shift())!
+      else
+        cluster.remove(removeContainer)!
+    else if (command == 'update')
+      updateContainer = argv._.shift()
 
-    if (updateContainer == 'website')
-      cluster.updateWebsite(argv._.shift())!
-    else
-      cluster.update(updateContainer)!
-  else if (command == 'stop')
-    stopContainer = argv._.shift()
+      if (updateContainer == 'website')
+        cluster.updateWebsite(argv._.shift())!
+      else
+        cluster.update(updateContainer)!
+    else if (command == 'stop')
+      stopContainer = argv._.shift()
 
-    if (stopContainer == 'proxy')
-      cluster.stopProxy()!
-    else if (stopContainer == 'website')
-      cluster.stopWebsite(argv._.shift())!
+      if (stopContainer == 'proxy')
+        cluster.stopProxy()!
+      else if (stopContainer == 'website')
+        cluster.stopWebsite(argv._.shift())!
+      else
+        cluster.stop(stopContainer)!
+    else if (command == 'status')
+      cluster.status()!
+    else if (command == 'help')
+      help()
     else
-      cluster.stop(stopContainer)!
-  else if (command == 'help')
-    help()
-  else
-    console.log "no such command: #(command)"
-    help()
+      console.log "no such command: #(command)"
+      help()
+  finally
+    snowdock.close()!
 catch (e)
   console.log (e)
   process.exit(1)
-finally
-  snowdock.close()
