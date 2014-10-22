@@ -249,43 +249,50 @@ describe 'snowdock' =>
 
         it 'can start, stop and start a container'
           api.start 'nodeapp'!
-          httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
-          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
+          retry!
+            httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
+            findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
 
           api.stop 'nodeapp'!
-          httpism.get "http://#(vip):8000/".should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
-          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
+          retry!
+            httpism.get "http://#(vip):8000/".should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
+            findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
 
           api.start 'nodeapp'!
-          httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
-          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
+          retry!
+            httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
+            findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
 
         it 'update a container'
           api.start 'nodeapp'!
-          firstBody = httpism.get "http://#(vip):8000"!.body
-          firstBody.message.should.equal 'hi from nodeapp'
-          firstBody.version.should.equal 1
-          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
+          retry!
+            firstBody = httpism.get "http://#(vip):8000"!.body
+            firstBody.message.should.equal 'hi from nodeapp'
+            firstBody.version.should.equal 1
+            findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
 
           makeChangeToApp(2)!
           buildDockerImage (imageName: imageName, dir: 'nodeapp')!
 
           api.update 'nodeapp'!
-          secondBody = httpism.get "http://#(vip):8000"!.body
-          secondBody.message.should.equal 'hi from nodeapp'
-          secondBody.version.should.equal 2
-          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
+          retry!
+            secondBody = httpism.get "http://#(vip):8000"!.body
+            secondBody.message.should.equal 'hi from nodeapp'
+            secondBody.version.should.equal 2
+            findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
 
         it 'remove a container'
           api.start 'nodeapp'!
-          firstBody = httpism.get "http://#(vip):8000"!.body
-          firstBody.message.should.equal 'hi from nodeapp'
-          firstBody.version.should.equal 1
-          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
+          retry!
+            firstBody = httpism.get "http://#(vip):8000"!.body
+            firstBody.message.should.equal 'hi from nodeapp'
+            firstBody.version.should.equal 1
+            findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
 
           api.remove 'nodeapp'!
-          httpism.get "http://#(vip):8000/".should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
-          findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 0
+          retry!
+            httpism.get "http://#(vip):8000/".should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
+            findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 0
 
   describe 'api'
     api =

@@ -10,15 +10,15 @@
     "snowdock": "bin/snowdock"
   },
   "dependencies": {
-    "bluebird": "^2.2.1",
+    "bluebird": "^2.3.6",
     "dockerode": "^2.0.0",
     "handlebars": "^2.0.0",
     "httpism": "^0.1.2",
     "minimist": "^0.2.0",
     "redis": "^0.10.3",
+    "shellsubstitute": "^1.1.0",
     "ssh-forward": "^0.3.0",
     "underscore": "^1.6.0",
-    "shellsubstitute": "^1.1.0",
     "waitforsocket": "^0.1.1"
   },
   "devDependencies": {
@@ -26,7 +26,7 @@
     "qo": "^0.2.1",
     "chai": "^1.9.1",
     "chai-as-promised": "^4.1.1",
-    "pogo": "^0.8.7"
+    "pogo": "^0.9.6"
   },
   "scripts": {
     "test": "mocha test/**Spec.*",

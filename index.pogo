@@ -134,11 +134,11 @@ exports.cluster (config) =
           websites = [
             websiteName <- Object.keys(config.websites)
             websiteName != 'proxy'
-            website = config.websites.(websiteName)
+            ws = config.websites.(websiteName)
             {
               name = websiteName
-              website = website
-              containers = host.website (website).status()!
+              website = ws
+              containers = host.website (ws).status()!
             }
           ]
         }
@@ -187,19 +187,19 @@ exports.host (host) =
     proxy() = proxy(self, docker, redisDb)
 
     start(containerConfig)! =
-      container = self.container(containerConfig.name)
-      if (container.status()!)
-        container.start()!
+      c = self.container(containerConfig.name)
+      if (c.status()!)
+        c.start()!
       else
         self.runContainer(containerConfig)!
 
     update(containerConfig)! =
-      container = self.container(containerConfig.name)
+      c = self.container(containerConfig.name)
 
       self.pullImage(containerConfig.image)!
 
-      if (container.status()!)
-        container.remove(force: true)!
+      if (c.status()!)
+        c.remove(force: true)!
 
       self.runContainer(containerConfig)!
 
@@ -216,15 +216,15 @@ exports.host (host) =
         Env = environmentVariables(containerConfig.env)
       }
 
-      container = docker()!.createContainer(createOptions, ^)!
+      c = docker()!.createContainer(createOptions, ^)!
 
       startOptions = {
         PortBindings = portBindings(containerConfig.publish)
         NetworkMode = containerConfig.net
       }
 
-      container.start (startOptions, ^)!
-      self.container(container.id)
+      c.start (startOptions, ^)!
+      self.container(c.id)
 
     container(name) = container(name, self, docker)
     image(name) = image(name, self, docker)
@@ -238,16 +238,16 @@ exports.host (host) =
         self.pullImage! (imageName)
 
     pullImage (imageName)! =
-      image = parseImageName(imageName)
+      i = parseImageName(imageName)
 
-      if (image.fromImage.indexOf '/' != -1)
+      if (i.fromImage.indexOf '/' != -1)
         if (host.docker.auth)
           log.debug "pulling image '#(imageName)' as user '#(host.docker.auth.username)'"
         else
           log.debug "pulling image '#(imageName)'"
 
         promise! @(result, error)
-          docker()!.createImage (host.docker.auth, image) @(e, stream)
+          docker()!.createImage (host.docker.auth, i) @(e, stream)
             if (e)
               error(e)
             else
@@ -282,9 +282,9 @@ exports.host (host) =
 container (name, host, docker) =
   {
     status() =
-      container = docker()!.getContainer(name)
+      c = docker()!.getContainer(name)
       try
-        container.inspect(^)!
+        c.inspect(^)!
       catch (e)
         if (e.statusCode == 404)
           nil
@@ -301,8 +301,8 @@ container (name, host, docker) =
     remove(force: false)! =
       try
         log.debug "removing container '#(name)'"
-        container = docker()!.getContainer(name)
-        container.remove {force = force} ^!
+        c = docker()!.getContainer(name)
+        c.remove {force = force} ^!
         true
       catch (e)
         if (e.reason != 'no such container')
@@ -328,9 +328,9 @@ image (name, host, docker) =
   {
     remove(force: false)! =
       log.debug "removing image '#(name)'"
-      image = docker()!.getImage(name)
+      i = docker()!.getImage(name)
       try
-        image.remove({force = force}, ^)!
+        i.remove({force = force}, ^)!
         true
       catch (e)
         if (e.statusCode == 404)
@@ -339,9 +339,9 @@ image (name, host, docker) =
           throw (e)
 
     status()! =
-      image = docker()!.getImage(name)
+      i = docker()!.getImage(name)
       try
-        image.inspect (^)!
+        i.inspect (^)!
       catch (e)
         if (e.statusCode == 404)
           nil
@@ -519,39 +519,39 @@ proxy (host, docker, redisDb) =
 
     addBackends(hosts, hostname: nil) =
       log.debug "adding hosts: #([h <- hosts, "http://#(h.host):#(h.port)"].join ', ')"
-      redis = redisDb()!
+      r = redisDb()!
 
-      len = redis.llen (frontendKey(hostname)) ^!
+      len = r.llen (frontendKey(hostname)) ^!
       if (len == 0)
-        redis.rpush(frontendKey(hostname), hostname, ^)!
+        r.rpush(frontendKey(hostname), hostname, ^)!
 
       [
         h <- hosts
-        redis.rpush(frontendKey(hostname), "http://#(h.host):#(h.port)", ^)!
+        r.rpush(frontendKey(hostname), "http://#(h.host):#(h.port)", ^)!
       ]
 
     backendsByHostname(hostname) =
-      redis = redisDb()!
+      r = redisDb()!
 
-      [h <- redis.lrange (backendKey(hostname), 0, -1) ^!, JSON.parse(h)]
+      [h <- r.lrange (backendKey(hostname), 0, -1) ^!, JSON.parse(h)]
 
     removeBackends(hosts, hostname: nil) =
       log.debug "removing hosts: #([h <- hosts, "http://#(h.host):#(h.port)"].join ', ')"
-      redis = redisDb()!
+      r = redisDb()!
 
       [
         h <- hosts
-        redis.lrem (frontendKey(hostname), 0, frontendHost(h)) ^!
+        r.lrem (frontendKey(hostname), 0, frontendHost(h)) ^!
       ]
 
     setBackends(hosts, hostname: nil) =
       log.debug "setting hosts: #([h <- hosts, "http://#(h.host):#(h.port)"].join ', ')"
-      redis = redisDb()!
+      r = redisDb()!
 
-      redis.del(backendKey(hostname), ^)!
+      r.del(backendKey(hostname), ^)!
       [
         h <- hosts
-        redis.rpush(backendKey(hostname), JSON.stringify(h), ^)!
+        r.rpush(backendKey(hostname), JSON.stringify(h), ^)!
       ]
   }
 
