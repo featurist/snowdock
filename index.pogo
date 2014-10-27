@@ -19,10 +19,15 @@ redisClients = []
 closeRedisConnections() =
   [
     c <- redisClients
+    @{ console.log 'closing redis connection', true } ()
     try
+      console.log 'quiting'
       c.quit(^)!
+      console.log 'quit'
     catch (e)
-      c.end(^)!
+      console.log 'ending'
+      c.end()
+      console.log 'end'
   ]
 
   redisClients := []
@@ -178,6 +183,7 @@ exports.host (host) =
         client
       else
         client := connectToRedis(connectToSsh(host.redis)!)
+        client.on 'error' @{}
         client
 
   {
