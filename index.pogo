@@ -19,15 +19,10 @@ redisClients = []
 closeRedisConnections() =
   [
     c <- redisClients
-    @{ console.log 'closing redis connection', true } ()
     try
-      console.log 'quiting'
       c.quit(^)!
-      console.log 'quit'
     catch (e)
-      console.log 'ending'
       c.end()
-      console.log 'end'
   ]
 
   redisClients := []
