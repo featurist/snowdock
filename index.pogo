@@ -178,7 +178,6 @@ exports.host (host) =
         client
       else
         client := connectToRedis(connectToSsh(host.redis)!)
-        client.on 'error' @{}
         client
 
   {
