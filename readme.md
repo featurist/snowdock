@@ -72,7 +72,9 @@ The configuration file has the following format:
               // mount /host/path from the host into /container/path in the container
               // readonly
               '/host/path:/container/path:ro'
-            ]
+            ],
+            // privileged option: true|false|undefined
+            privileged: true
           }
         },
         "proxy": {

@@ -221,6 +221,7 @@ exports.host (host) =
       startOptions = {
         PortBindings = portBindings(containerConfig.publish)
         NetworkMode = containerConfig.net
+        Privileged = containerConfig.privileged
       }
 
       c.start (startOptions, ^)!
