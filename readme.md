@@ -61,7 +61,18 @@ The configuration file has the following format:
               // variables from the parent process
               // see $password
               "DB_URL": "postgres://username:$password@localhost/database"
-            }
+            },
+            // volumes
+            volumes: [
+              // mount /path from the host into /path in the container
+              '/path',
+              // mount /host/path from the host into /container/path in the container
+              // read-write
+              '/host/path:/container/path:rw,
+              // mount /host/path from the host into /container/path in the container
+              // readonly
+              '/host/path:/container/path:ro'
+            ]
           }
         },
         "proxy": {
