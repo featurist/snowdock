@@ -220,7 +220,7 @@ exports.host (host) =
       startOptions = {
         Binds = containerConfig.volumes
         PortBindings = portBindings(containerConfig.publish)
-        NetworkMode = containerConfig.net
+        NetworkMode = containerConfig.net @or 'bridge'
         Privileged = containerConfig.privileged
       }
 
