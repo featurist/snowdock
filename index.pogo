@@ -212,13 +212,13 @@ exports.host (host) =
       createOptions = {
         Image = containerConfig.image
         name = containerConfig.name
-        Volumes = volumes(containerConfig.volumes)
         Env = environmentVariables(containerConfig.env)
       }
 
       c = docker()!.createContainer(createOptions, ^)!
 
       startOptions = {
+        Binds = containerConfig.volumes
         PortBindings = portBindings(containerConfig.publish)
         NetworkMode = containerConfig.net
         Privileged = containerConfig.privileged
