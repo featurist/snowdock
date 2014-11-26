@@ -213,6 +213,7 @@ exports.host (host) =
         Image = containerConfig.image
         name = containerConfig.name
         Env = environmentVariables(containerConfig.env)
+        NetworkMode = containerConfig.net
         ExposedPorts = portBindings(containerConfig.publish, create = true)
       }
 
