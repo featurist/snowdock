@@ -11,10 +11,11 @@
   },
   "dependencies": {
     "bluebird": "^2.3.6",
-    "dockerode": "^2.0.0",
+    "dockerode": "^2.0.6",
     "handlebars": "^2.0.0",
     "httpism": "^0.1.2",
     "minimist": "^0.2.0",
+    "portfinder": "^0.3.0",
     "redis": "^0.10.3",
     "shellsubstitute": "^1.1.0",
     "ssh-forward": "^0.3.0",

@@ -5,6 +5,7 @@ redis = require 'redis'
 sshForward = require 'ssh-forward'
 substitute = require 'shellsubstitute'
 handlebars = require 'handlebars'
+portfinder = require 'portfinder'
 
 connectToDocker(config) =
   log.debug "connecting to docker '#('http://' + config.host):#(config.port)'"
@@ -384,11 +385,8 @@ website (websiteConfig, host, docker) = {
     backends
 
   status() =
-    console.log "in website status"
     lb = host.proxy()
     existingBackends = lb.backendsByHostname(websiteConfig.hostname)!
-
-    console.log('existingBackends', existingBackends)
 
     [
       b <- existingBackends
@@ -536,6 +534,9 @@ proxy (host, docker, redisDb) =
     backendsByHostname(hostname) =
       r = redisDb()!
 
+      console.log('frontends', r.lrange(frontendKey(hostname), 0, -1) ^!)
+      console.log('hostname key', frontendKey(hostname))
+
       [h <- r.lrange (backendKey(hostname), 0, -1) ^!, JSON.parse(h)]
 
     removeBackends(hosts, hostname: nil) =
@@ -620,7 +621,6 @@ environmentVariables(env) =
 
 sshTunnels =
   tunnels = []
-  port = 42468
   tunnelCache = {}
 
   {
@@ -628,11 +628,10 @@ sshTunnels =
       key = "#(config.host):#(config.port):#(config.user):#(config.command)"
 
       if (@not tunnelCache.(key))
-        log.debug "opening SSH tunnel to #(config.host):#(config.port) on #(port)"
-
         openPort() =
-          localPort = port
-          port := port + 1
+          localPort = portfinder.getPort(^)!
+          portfinder.basePort = localPort + 1
+          log.debug "opening SSH tunnel to #(config.host):#(config.port) on #(localPort)"
           tunnel = sshForward! {
             hostname =
               if (config.user)
@@ -656,7 +655,7 @@ sshTunnels =
 
         tunnelCache.(key) = openPort()
       else
-        log.debug "using cached SSH tunnel to #(config.host):#(config.port) on #(port)"
+        log.debug "using cached SSH tunnel to #(config.host):#(config.port)"
 
       (tunnelCache.(key))!
 
