@@ -1,6 +1,5 @@
 httpism = require 'httpism'
 fs = require 'fs'
-vagrantIp = require './vagrantIp'
 chai = require 'chai'
 should = chai.should()
 chaiAsPromised = require 'chai-as-promised'
@@ -12,6 +11,13 @@ snowdock = require '../index'
 retry = require 'trytryagain'
 redis = require 'redis'
 waitForSocket = require 'waitforsocket'
+urlUtils = require 'url'
+
+dockerConnection() =
+  if (process.env.DOCKER_HOST)
+    urlUtils.parse(process.env.DOCKER_HOST)
+  else
+    urlUtils.parse('tcp://localhost:2375/')
 
 describe 'snowdock' =>
   min = (n) mins = n * 60 * 1000
@@ -20,18 +26,15 @@ describe 'snowdock' =>
   self.timeout (5 mins)
 
   dockerRegistryDomain = nil
-  dockerHost = nil
-  dockerPort = nil
+  dockerUrl = nil
   imageName = nil
-  vip = nil
   config = nil
 
   beforeEach
     makeChangeToApp(1)!
-    vip := vagrantIp()!
-    dockerRegistryDomain := "#(vip):5000"
-    dockerHost := "http://#(vip)"
-    dockerPort := 4243
+    dockerUrl := dockerConnection()
+    console.log(dockerUrl)
+    dockerRegistryDomain := "#(dockerUrl.hostname):5000"
     imageName := "#(dockerRegistryDomain)/nodeapp"
 
     removeAllContainers(command: 'node_modules/.bin/pogo index.pogo')!
@@ -41,11 +44,11 @@ describe 'snowdock' =>
       hosts = {
         "vagrant" = {
           docker = {
-            host = vip
-            port = 4243
+            host = dockerUrl.hostname
+            port = dockerUrl.port
           }
           redis = {
-            host = vip
+            host = dockerUrl.hostname
             port = 6379
           }
           internalIp = "172.17.42.1"
@@ -67,12 +70,16 @@ describe 'snowdock' =>
     buildDockerImage (imageName: imageName, dir: 'nodeapp')!
 
   findContainers(imageName: nil, command: nil) =
-    docker = @new Docker(host: dockerHost, port: dockerPort)
+    docker = @new Docker(host: "http://#(dockerUrl.hostname)", port: Number(dockerUrl.port))
+    console.log 'here #1'
     [
       c <- docker.listContainers { all = true } ^!
       if (imageName)
+        console.log 'here #2'
+
         new (RegExp "^#(imageName):?").test(c.Image)
       else if (command)
+        console.log 'here #3'
         c.Command == command
 
       docker.getContainer (c.Id)
@@ -86,18 +93,18 @@ describe 'snowdock' =>
 
   proxyShouldBeRunning(hipachePort: 80)! =
     retry(timeout: 10000)!
-      response = httpism.get "http://#(vip):#(hipachePort)/" (exceptions: false)!
+      response = httpism.get "http://#(dockerUrl.hostname):#(hipachePort)/" (exceptions: false)!
       response.statusCode.should.equal 400
       response.body.should.match r/no application configured/i
 
     retry(timeout: 2000)!
-      hipacheRedis = redis.createClient(6379, vip)
+      hipacheRedis = redis.createClient(6379, dockerUrl.hostname)
       hipacheRedis.on 'error' @{}
       hipacheRedis.info(^)!
 
   proxyShouldNotBeRunning()! =
-    httpism.get "http://#(vip)/" (exceptions: false).should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
-    hipacheRedis = redis.createClient(6379, vip)
+    httpism.get "http://#(dockerUrl.hostname)/" (exceptions: false).should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
+    hipacheRedis = redis.createClient(6379, dockerUrl.hostname)
     hipacheRedis.on 'error' @{}
     hipacheRedis.info(^).should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
 
@@ -133,11 +140,11 @@ describe 'snowdock' =>
     context 'when it is installed'
       beforeEach
         api.startProxy()!
-        waitForSocket(vip, 6379, timeout: 2000)!
+        waitForSocket(dockerUrl.hostname, 6379, timeout: 2000)!
 
       it 'can start a website'
         api.startWebsite 'nodeapp'!
-        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
+        waitFor 4 backendsToRespond (host: dockerUrl.hostname, hostname: 'nodeapp')!
 
       it 'can start a website over ssh'
         config2 = clone(config)
@@ -148,34 +155,38 @@ describe 'snowdock' =>
         api.setConfig! (config2)
 
         api.startWebsite 'nodeapp'!
-        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
+        waitFor 4 backendsToRespond (host: dockerUrl.hostname, hostname: 'nodeapp')!
 
       it 'can start, stop and start a website'
         self.timeout 60000
 
         api.startWebsite 'nodeapp'!
-        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
+        waitFor 4 backendsToRespond (host: dockerUrl.hostname, hostname: 'nodeapp')!
 
         api.stopWebsite 'nodeapp'!
-        httpism.get "http://#(vip)" (exceptions: false)!.statusCode.should.equal 400
+        httpism.get "http://#(dockerUrl.hostname)" (exceptions: false)!.statusCode.should.equal 400
 
         api.startWebsite 'nodeapp'!
-        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', timeout: 35000)!
+        waitFor 4 backendsToRespond (host: dockerUrl.hostname, hostname: 'nodeapp', timeout: 35000)!
 
       it 'can start and remove a website'
         api.startWebsite 'nodeapp'!
-        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
+        waitFor 4 backendsToRespond (host: dockerUrl.hostname, hostname: 'nodeapp')!
 
         api.removeWebsite 'nodeapp'!
 
-        httpism.get "http://#(vip)" (exceptions: false)!.statusCode.should.equal 400
+        httpism.get "http://#(dockerUrl.hostname)" (exceptions: false)!.statusCode.should.equal 400
         findContainers(command: 'node_modules/.bin/pogo index.pogo')!.should.eql []
+
+      describe 'status'
+        it 'reports status'
+          console.log(api.status())
 
       context 'with no service interruption'
         monitor = nil
 
         beforeEach
-          monitor := serviceMonitor(host: vip, hostname: 'nodeapp')
+          monitor := serviceMonitor(host: dockerUrl.hostname, hostname: 'nodeapp')
 
         afterEach
           monitor.stop()
@@ -185,19 +196,19 @@ describe 'snowdock' =>
 
         it 'can update a website'
           api.updateWebsite 'nodeapp'!
-          waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
+          waitFor 4 backendsToRespond (host: dockerUrl.hostname, hostname: 'nodeapp')!
 
           makeChangeToApp(2)!
           buildDockerImage (imageName: imageName, dir: 'nodeapp')!
 
           api.updateWebsite 'nodeapp'!
-          waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', version: 2)!
+          waitFor 4 backendsToRespond (host: dockerUrl.hostname, hostname: 'nodeapp', version: 2)!
 
           makeChangeToApp(3)!
           buildDockerImage (imageName: imageName, dir: 'nodeapp')!
 
           api.updateWebsite 'nodeapp'!
-          waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp', version: 3)!
+          waitFor 4 backendsToRespond (host: dockerUrl.hostname, hostname: 'nodeapp', version: 3)!
 
       it 'can stop the proxy and start it again'
         api.stopProxy()!
@@ -208,7 +219,7 @@ describe 'snowdock' =>
 
       it 'removes the proxy and all website containers'
         api.startWebsite 'nodeapp'!
-        waitFor 4 backendsToRespond (host: vip, hostname: 'nodeapp')!
+        waitFor 4 backendsToRespond (host: dockerUrl.hostname, hostname: 'nodeapp')!
 
         config2 = clone(config)
         config2.websites = {}
@@ -236,7 +247,7 @@ describe 'snowdock' =>
           api.start 'nodeapp'!
 
           retry!
-            httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
+            httpism.get "http://#(dockerUrl.hostname):8000"!.body.message.should.equal 'hi from nodeapp'
 
           container = snowdock.host (config.hosts.vagrant).container('nodeapp')
           status = container.status()!
@@ -250,23 +261,23 @@ describe 'snowdock' =>
         it 'can start, stop and start a container'
           api.start 'nodeapp'!
           retry!
-            httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
+            httpism.get "http://#(dockerUrl.hostname):8000"!.body.message.should.equal 'hi from nodeapp'
             findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
 
           api.stop 'nodeapp'!
           retry!
-            httpism.get "http://#(vip):8000/".should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
+            httpism.get "http://#(dockerUrl.hostname):8000/".should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
             findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
 
           api.start 'nodeapp'!
           retry!
-            httpism.get "http://#(vip):8000"!.body.message.should.equal 'hi from nodeapp'
+            httpism.get "http://#(dockerUrl.hostname):8000"!.body.message.should.equal 'hi from nodeapp'
             findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
 
         it 'update a container'
           api.start 'nodeapp'!
           retry!
-            firstBody = httpism.get "http://#(vip):8000"!.body
+            firstBody = httpism.get "http://#(dockerUrl.hostname):8000"!.body
             firstBody.message.should.equal 'hi from nodeapp'
             firstBody.version.should.equal 1
             findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
@@ -276,7 +287,7 @@ describe 'snowdock' =>
 
           api.update 'nodeapp'!
           retry!
-            secondBody = httpism.get "http://#(vip):8000"!.body
+            secondBody = httpism.get "http://#(dockerUrl.hostname):8000"!.body
             secondBody.message.should.equal 'hi from nodeapp'
             secondBody.version.should.equal 2
             findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
@@ -284,14 +295,14 @@ describe 'snowdock' =>
         it 'remove a container'
           api.start 'nodeapp'!
           retry!
-            firstBody = httpism.get "http://#(vip):8000"!.body
+            firstBody = httpism.get "http://#(dockerUrl.hostname):8000"!.body
             firstBody.message.should.equal 'hi from nodeapp'
             firstBody.version.should.equal 1
             findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 1
 
           api.remove 'nodeapp'!
           retry!
-            httpism.get "http://#(vip):8000/".should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
+            httpism.get "http://#(dockerUrl.hostname):8000/".should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
             findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 0
 
   describe 'api'
@@ -318,6 +329,7 @@ describe 'snowdock' =>
         update(name)! = cluster.update(name)!
         stop(name)! = cluster.stop(name)!
         remove(name)! = cluster.remove(name)!
+        status()! = cluster.status()!
 
         setConfig(c) =
           clusterConfig := c

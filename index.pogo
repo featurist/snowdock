@@ -100,6 +100,7 @@ exports.cluster (config) =
 
     startProxy()! =
       withLoadBalancers! @(lb)
+        console.log "starting"
         lb.start(config.websites.proxy)!
 
     removeProxy()! =
@@ -534,9 +535,6 @@ proxy (host, docker, redisDb) =
     backendsByHostname(hostname) =
       r = redisDb()!
 
-      console.log('frontends', r.lrange(frontendKey(hostname), 0, -1) ^!)
-      console.log('hostname key', frontendKey(hostname))
-
       [h <- r.lrange (backendKey(hostname), 0, -1) ^!, JSON.parse(h)]
 
     removeBackends(hosts, hostname: nil) =
@@ -630,6 +628,8 @@ sshTunnels =
       if (@not tunnelCache.(key))
         openPort() =
           localPort = portfinder.getPort(^)!
+          // we have the port, so we need to prevent it being found again
+          // before SSH uses it. Remember this is a concurrent app!
           portfinder.basePort = localPort + 1
           log.debug "opening SSH tunnel to #(config.host):#(config.port) on #(localPort)"
           tunnel = sshForward! {
