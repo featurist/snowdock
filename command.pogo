@@ -2,6 +2,7 @@ argv = (require 'minimist')(process.argv.slice 2)
 snowdock = require './'
 fs = require 'fs'
 path = require 'path'
+handlebars = require 'handlebars'
 
 command = argv._.shift()
 
@@ -67,7 +68,11 @@ try
       else
         cluster.stop(stopContainer)!
     else if (command == 'status')
-      cluster.status()!
+      statuses = cluster.status()!
+
+      statusTemplate = handlebars.compile(fs.readFile "#(__dirname)/status.hb" 'utf-8' ^!)
+
+      console.log(statusTemplate({ hosts = statuses }))
     else if (command == 'help')
       help()
     else

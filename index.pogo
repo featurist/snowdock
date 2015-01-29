@@ -1,15 +1,15 @@
 Docker = require 'dockerode'
 fs = require 'fs'
 _ = require 'underscore'
-redis = require 'redis'
+redis = require 'then-redis'
 sshForward = require 'ssh-forward'
 substitute = require 'shellsubstitute'
-handlebars = require 'handlebars'
 portfinder = require 'portfinder'
+waitForSocket = require 'waitforsocket'
 
 connectToDocker(config) =
   log.debug "connecting to docker '#('http://' + config.host):#(config.port)'"
-  @new Docker(host: 'http://' + config.host, port: config.port)
+  @new Docker(config)
 
 exports.close() =
   closeRedisConnections()!
@@ -21,7 +21,7 @@ closeRedisConnections() =
   [
     c <- redisClients
     try
-      c.quit(^)!
+      c.quit()!
     catch (e)
       c.end()
   ]
@@ -33,7 +33,7 @@ closeSshConnections() =
 
 connectToRedis(config) =
   log.debug "connecting to redis '#(config.host):#(config.port)'"
-  client = redis.createClient(config.port, config.host)
+  client = redis.createClient(port: config.port, host: config.host)
   redisClients.push(client)
   client
 
@@ -75,6 +75,7 @@ exports.cluster (config) =
 
   {
     startWebsite(name)! =
+      self.startProxy()!
       [
         host <- hosts()
         host.website (config.websites.(name)).start()!
@@ -87,6 +88,7 @@ exports.cluster (config) =
       ]
 
     updateWebsite(name)! =
+      self.startProxy()!
       [
         host <- hosts()
         host.website (config.websites.(name)).update()!
@@ -100,7 +102,6 @@ exports.cluster (config) =
 
     startProxy()! =
       withLoadBalancers! @(lb)
-        console.log "starting"
         lb.start(config.websites.proxy)!
 
     removeProxy()! =
@@ -126,30 +127,27 @@ exports.cluster (config) =
       [host <- hosts(), host.container(name).remove(force: true)!]
 
     status() =
-      statuses = [
+      stripCerts(config) =
+        c = JSON.parse(JSON.stringify(config))
+        delete (c.docker.ca)
+        delete (c.docker.cert)
+        delete (c.docker.key)
+        c
+
+      [
         hostKey <- Object.keys(config.hosts)
         hostConfig = config.hosts.(hostKey)
         host = exports.host(hostConfig)
+        status = host.status()!
         {
           name = hostKey
-          host = host
-          websites = [
-            websiteName <- Object.keys(config.websites)
-            websiteName != 'proxy'
-            ws = config.websites.(websiteName)
-            {
-              name = websiteName
-              website = ws
-              containers = host.website (ws).status()!
-            }
-          ]
+          host = stripCerts(hostConfig)
+          containers = status.containers
+          proxy = status.proxy
         }
       ]
-
-      statusTemplate = handlebars.compile(fs.readFile "#(__dirname)/status.hb" 'utf-8' ^!)
-
-      console.log(statusTemplate({ hosts = statuses }))
   }
+
 
 exports.host (host) =
   connectToSsh(service)! =
@@ -161,7 +159,7 @@ exports.host (host) =
         user = host.ssh.user
       }
 
-      { host = 'localhost', port = port }
+      _.extend {} (service) { host = 'localhost', port = port }
     else
       service
 
@@ -187,6 +185,67 @@ exports.host (host) =
     internalIp = host.internalIp
 
     proxy() = proxy(self, docker, redisDb)
+
+    waitForService(serviceName) =
+      connectionDetails = connectToSsh(host.(serviceName))!
+      waitForSocket(connectionDetails.host, connectionDetails.port, timeout: 2000)!
+
+    status() =
+      r = redisDb()!
+
+      scan(pattern, keys, cursor) =
+        keys := keys @or []
+        cursor := cursor @or "0"
+
+        results = r.scan(cursor @or 0, 'match', pattern)!
+        keys.push(results.1, ...)
+
+        if (results.0 != "0")
+          scan(pattern, keys, results.0)!
+        else
+          keys
+
+      frontends = [
+        key <- scan('frontend:*')!
+        frontend <- r.lrange(key, 1, -1)!
+        frontend
+      ]
+
+      backends = [
+        backendKey <- scan('backend:*')!
+        backend <- r.lrange(backendKey, 0, -1)!
+        JSON.parse(backend)
+      ]
+
+      containers = [
+        c <- docker()!.listContainers(^)!
+        {
+          id = c.Id
+          status = c
+        }
+      ]
+
+      containersIndex = _.indexBy (containers) 'id'
+
+      for each @(b) in (backends)
+        containersIndex.(b.container).backend = b
+
+      containersByUrl = _.indexBy [c <- containers, c.backend, c] @(c)
+        "http://#(c.backend.host):#(c.backend.port)"
+
+      for each @(f) in (frontends)
+        cont = containersByUrl.(f)
+        cont.frontend = f
+        cont.proxyCorrect =
+          f == "http://#(cont.backend.host):#(cont.backend.port)" \
+          @and cont.status.Ports.0.PublicPort == Number(cont.backend.port)
+
+      proxyStatus = self.proxy().status()!
+
+      {
+        containers = containers
+        proxy = nil
+      }
 
     start(containerConfig)! =
       c = self.container(containerConfig.name)
@@ -215,28 +274,23 @@ exports.host (host) =
         Image = containerConfig.image
         name = containerConfig.name
         Env = environmentVariables(containerConfig.env)
-        NetworkMode = containerConfig.net
         ExposedPorts = portBindings(containerConfig.publish, create = true)
+
+        HostConfig = {
+          Binds = containerConfig.volumes
+          NetworkMode = containerConfig.net
+          PortBindings = portBindings(containerConfig.publish)
+          Privileged = containerConfig.privileged
+        }
       }
 
       c = docker()!.createContainer(createOptions, ^)!
-
-      startOptions = {
-        Binds = containerConfig.volumes
-        PortBindings = portBindings(containerConfig.publish)
-        NetworkMode = containerConfig.net
-        Privileged = containerConfig.privileged
-      }
-
-      c.start (startOptions, ^)!
+      c.start ({}, ^)!
       self.container(c.id)
 
     container(name) = container(name, self, docker)
     image(name) = image(name, self, docker)
     website(websiteConfig) = website(websiteConfig, self, docker)
-
-    status(name) =
-      self.container(name).status()!
 
     ensureImagePresent! (imageName) =
       if (@not self.image(imageName).status()!)
@@ -493,6 +547,9 @@ proxy (host, docker, redisDb) =
     isRunning()! =
       host.container(hipacheName).isRunning()!
 
+    status() =
+      host.container(hipacheName).status()!
+
     start(config) =
       if (@not self.isInstalled()!)
         host.runContainer! (_.extend {
@@ -504,6 +561,8 @@ proxy (host, docker, redisDb) =
         if (@not self.isRunning()!)
           host.container(hipacheName).start()!
 
+      host.waitForService('redis')!
+
     stop() =
       if (self.isRunning()!)
         h = docker()!.getContainer(hipacheName)
@@ -512,7 +571,7 @@ proxy (host, docker, redisDb) =
     remove() =
       if (self.isRunning()!)
         [
-          key <- redisDb()!.keys(backendKey '*', ^)!
+          key <- redisDb()!.keys(backendKey '*')!
           hostname = key.split ':'.1
           host.website { hostname = hostname }.remove()!
         ]
@@ -523,19 +582,18 @@ proxy (host, docker, redisDb) =
       log.debug "adding hosts: #([h <- hosts, "http://#(h.host):#(h.port)"].join ', ')"
       r = redisDb()!
 
-      len = r.llen (frontendKey(hostname)) ^!
+      len = r.llen (frontendKey(hostname))!
       if (len == 0)
-        r.rpush(frontendKey(hostname), hostname, ^)!
+        r.rpush(frontendKey(hostname), hostname)!
 
       [
         h <- hosts
-        r.rpush(frontendKey(hostname), "http://#(h.host):#(h.port)", ^)!
+        r.rpush(frontendKey(hostname), "http://#(h.host):#(h.port)")!
       ]
 
     backendsByHostname(hostname) =
       r = redisDb()!
-
-      [h <- r.lrange (backendKey(hostname), 0, -1) ^!, JSON.parse(h)]
+      [h <- r.lrange (backendKey(hostname), 0, -1)!, JSON.parse(h)]
 
     removeBackends(hosts, hostname: nil) =
       log.debug "removing hosts: #([h <- hosts, "http://#(h.host):#(h.port)"].join ', ')"
@@ -543,17 +601,17 @@ proxy (host, docker, redisDb) =
 
       [
         h <- hosts
-        r.lrem (frontendKey(hostname), 0, frontendHost(h)) ^!
+        r.lrem (frontendKey(hostname), 0, frontendHost(h))!
       ]
 
     setBackends(hosts, hostname: nil) =
       log.debug "setting hosts: #([h <- hosts, "http://#(h.host):#(h.port)"].join ', ')"
       r = redisDb()!
 
-      r.del(backendKey(hostname), ^)!
+      r.del(backendKey(hostname))!
       [
         h <- hosts
-        r.rpush(backendKey(hostname), JSON.stringify(h), ^)!
+        r.rpush(backendKey(hostname), JSON.stringify(h))!
       ]
   }
 

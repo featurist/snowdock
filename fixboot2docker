@@ -1,0 +1,4 @@
+boot2docker ssh sudo sh -c "'echo EXTRA_ARGS=\\\"--insecure-registry $(boot2docker ip):5000\\\" > /var/lib/boot2docker/profile'"
+boot2docker restart
+echo /var/lib/boot2docker/profile:
+boot2docker ssh cat /var/lib/boot2docker/profile

@@ -1,0 +1,1 @@
+docker run -d -e GUNICORN_OPTS=[--preload] -p 5000:5000 registry
