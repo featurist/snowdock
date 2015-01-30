@@ -39,9 +39,6 @@ describe 'snowdock' =>
     dockerRegistryDomain := "#(hostname):5000"
     imageName := "#(dockerRegistryDomain)/nodeapp"
 
-    removeAllContainers(command: 'node_modules/.bin/pogo index.pogo')!
-    removeAllContainers(imageName: 'library/hipache')!
-
     dockerConfig :=
       if (process.env.DOCKER_CERT_PATH)
         {
@@ -57,6 +54,9 @@ describe 'snowdock' =>
           host = dockerUrl.hostname
           port = Number(dockerUrl.port)
         }
+
+    removeAllContainers(command: 'node_modules/.bin/pogo index.pogo')!
+    removeAllContainers(imageName: 'library/hipache')!
 
     config := {
       hosts = {
@@ -176,7 +176,7 @@ describe 'snowdock' =>
         api.startWebsite 'nodeapp'!
         waitFor 4 backendsToRespond (host: hostname, hostname: 'nodeapp')!
 
-      it 'can start a website over ssh'
+      xit 'can start a website over ssh'
         config2 = clone(config)
         config2.hosts.localhost.ssh = {
           command = "ssh -i #(process.env.HOME)/.vagrant.d/insecure_private_key"
@@ -387,12 +387,12 @@ describe 'snowdock' =>
 
       api = {
         before() =
-          fs.writeFile "#(__dirname)/snowdock.json" (JSON.stringify(config)) ^!
+          fs.writeFile "#(__dirname)/snowdock.json" (JSON.stringify(dockerConfigWithCertFilenames(config))) ^!
 
         after() = nil
 
         setConfig(c) =
-          fs.writeFile "#(__dirname)/snowdock.json" (JSON.stringify(c)) ^!
+          fs.writeFile "#(__dirname)/snowdock.json" (JSON.stringify(dockerConfigWithCertFilenames(c))) ^!
       }
 
       for each @(cmd) in ('startProxy stopProxy removeProxy startWebsite updateWebsite stopWebsite removeWebsite start update stop remove status'.split ' ')
@@ -466,3 +466,16 @@ describe 'snowdock' =>
       result(requestAHost ({}, @new Date ().getTime() + timeout)!)
 
   clone(object) = JSON.parse(JSON.stringify(object))
+
+  dockerConfigWithCertFilenames(c) =
+    configWithCerts = clone(c)
+
+    hosts = [key <- Object.keys(configWithCerts.hosts), configWithCerts.hosts.(key)]
+
+    for each @(host) in (hosts)
+      if (host.docker.ca)
+        host.docker.ca = process.env.DOCKER_CERT_PATH + '/ca.pem'
+        host.docker.cert = process.env.DOCKER_CERT_PATH + '/cert.pem'
+        host.docker.key = process.env.DOCKER_CERT_PATH + '/key.pem'
+
+    configWithCerts

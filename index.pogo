@@ -8,7 +8,7 @@ portfinder = require 'portfinder'
 waitForSocket = require 'waitforsocket'
 
 connectToDocker(config) =
-  log.debug "connecting to docker '#('http://' + config.host):#(config.port)'"
+  log.debug "connecting to docker '#("#(config.protocol @or 'http')://" + config.host):#(config.port)'"
   @new Docker(config)
 
 exports.close() =
@@ -20,10 +20,7 @@ redisClients = []
 closeRedisConnections() =
   [
     c <- redisClients
-    try
-      c.quit()!
-    catch (e)
-      c.end()
+    c.quit()!
   ]
 
   redisClients := []

@@ -6,9 +6,25 @@ handlebars = require 'handlebars'
 
 command = argv._.shift()
 
+readConfig(filename) =
+  config = JSON.parse(fs.readFile (filename, 'utf-8', ^)!)
+
+  hosts = [
+    hostKey <- Object.keys(config.hosts)
+    host = config.hosts.(hostKey)
+  ]
+
+  for each @(h) in (hosts)
+    if (h.docker.ca)
+      h.docker.ca = fs.readFileSync(h.docker.ca)
+      h.docker.cert = fs.readFileSync(h.docker.cert)
+      h.docker.key = fs.readFileSync(h.docker.key)
+
+  config
+
 filename = argv.c @or argv.config @or 'snowdock.json'
 console.log "reading config file: #(filename)"
-cluster = snowdock.cluster(JSON.parse(fs.readFile (filename, 'utf-8', ^)!))
+cluster = snowdock.cluster(readConfig(filename)!)
 
 help() =
   console.log "usage: #(path.basename(process.argv.1)) COMMAND
