@@ -111,6 +111,13 @@ mount `/host/path` from the host into `/container/path` in the container readonl
 
     /host/path:/container/path:ro
 
+### links
+An array of links. Each link is of the form `container:alias`, and produces several environment variables in the container starting with `alias`. See [Linking Containers Together](https://docs.docker.com/userguide/dockerlinks/).
+
+E.g.
+
+    "links": ["redisdb:redis"]
+
 ### privileged
 Run the container with root privileges, this can be `true`, `false` or `undefined`
 
