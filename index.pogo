@@ -20,7 +20,10 @@ redisClients = []
 closeRedisConnections() =
   [
     c <- redisClients
-    c.quit()!
+    try
+      c.quit()!
+    catch (e)
+      c.end()
   ]
 
   redisClients := []
@@ -135,7 +138,7 @@ exports.cluster (config) =
         hostKey <- Object.keys(config.hosts)
         hostConfig = config.hosts.(hostKey)
         host = exports.host(hostConfig)
-        status = host.status()!
+        status = host.status(config)!
         {
           name = hostKey
           host = stripCerts(hostConfig)
@@ -187,7 +190,7 @@ exports.host (host) =
       connectionDetails = connectToSsh(host.(serviceName))!
       waitForSocket(connectionDetails.host, connectionDetails.port, timeout: 2000)!
 
-    status() =
+    status(config) =
       r = redisDb()!
 
       scan(pattern, keys, cursor) =
@@ -202,10 +205,16 @@ exports.host (host) =
         else
           keys
 
-      frontends = [
+      websites = [
         key <- scan('frontend:*')!
-        frontend <- r.lrange(key, 1, -1)!
-        frontend
+        values = r.lrange(key, 0, -1)!
+        {
+          host = values.0
+          frontends = [
+            frontend <- values.slice(1)
+            frontend
+          ]
+        }
       ]
 
       backends = [
@@ -225,17 +234,39 @@ exports.host (host) =
       containersIndex = _.indexBy (containers) 'id'
 
       for each @(b) in (backends)
-        containersIndex.(b.container).backend = b
+        if (containersIndex.(b.container))
+          containersIndex.(b.container).backend = b
 
       containersByUrl = _.indexBy [c <- containers, c.backend, c] @(c)
         "http://#(c.backend.host):#(c.backend.port)"
 
-      for each @(f) in (frontends)
-        cont = containersByUrl.(f)
-        cont.frontend = f
-        cont.proxyCorrect =
-          f == "http://#(cont.backend.host):#(cont.backend.port)" \
-          @and cont.status.Ports.0.PublicPort == Number(cont.backend.port)
+      websitesByHostname = _.indexBy[wsName <- Object.keys(config.websites @or {}), { name = wsName, website = config.websites.(wsName) }] @(w)
+        w.website.hostname
+
+      for each @(w) in (websites)
+        for each @(f) in (w.frontends)
+          cont = containersByUrl.(f)
+          if (cont)
+            cont.frontend = f
+            cont.websiteHostname = w.host
+            websiteConfig = websitesByHostname.(w.host)
+            if (websiteConfig)
+              cont.websiteConfig = websiteConfig.website
+              cont.websiteConfigName = websiteConfig.name
+
+            cont.proxyCorrect =
+              f == "http://#(cont.backend.host):#(cont.backend.port)" \
+              @and cont.status.Ports.0.PublicPort == Number(cont.backend.port)
+
+      for each @(conta) in (containers)
+        name = conta.status.Names.0.substring(1)
+        if (name == 'snowdock-hipache')
+          conta.proxyConfig = (config.websites @and config.websites.proxy) @or {}
+        else
+          if (config.containers)
+            conta.containerConfig = config.containers.(name)
+            if (conta.containerConfig)
+              conta.containerConfigName = name
 
       proxyStatus = self.proxy().status()!
 

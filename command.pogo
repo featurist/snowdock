@@ -86,6 +86,12 @@ try
     else if (command == 'status')
       statuses = cluster.status()!
 
+      handlebars.registerHelper 'contid' @(str)
+        str.substring(0, 12)
+
+      handlebars.registerHelper 'contname' @(str)
+        str.substring(1)
+
       statusTemplate = handlebars.compile(fs.readFile "#(__dirname)/status.hb" 'utf-8' ^!)
 
       console.log(statusTemplate({ hosts = statuses }))
