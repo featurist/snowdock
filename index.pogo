@@ -307,6 +307,7 @@ exports.host (host) =
         HostConfig = {
           Binds = containerConfig.volumes
           Links = containerConfig.links
+          VolumesFrom = containerConfig.volumesFrom
           NetworkMode = containerConfig.net
           PortBindings = portBindings(containerConfig.publish)
           Privileged = containerConfig.privileged

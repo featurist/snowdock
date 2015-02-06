@@ -111,6 +111,12 @@ mount `/host/path` from the host into `/container/path` in the container readonl
 
     /host/path:/container/path:ro
 
+### Volumes From
+
+An array of container names to mount volumes from. Names can be optionally followed by `:ro` or `:rw`, to specify readonly or readwrite. See [Docker Volumes](https://docs.docker.com/userguide/dockervolumes/).
+
+    "volumesFrom": ["redisdb-data"]
+
 ### links
 An array of links. Each link is of the form `container:alias`, and produces several environment variables in the container starting with `alias`. See [Linking Containers Together](https://docs.docker.com/userguide/dockerlinks/).
 
