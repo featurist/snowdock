@@ -43,5 +43,13 @@
     "devops"
   ],
   "author": "Tim Macfarlane <timmacfarlane@gmail.com>",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/featurist/snowdock.git"
+  },
+  "bugs": {
+    "url": "https://github.com/featurist/snowdock/issues"
+  },
+  "homepage": "https://github.com/featurist/snowdock"
 }
