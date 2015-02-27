@@ -342,17 +342,16 @@ exports.host (host) =
             else
               stream.setEncoding 'utf-8'
 
-              if (false)
-                stream.on 'data' @(data)
-                  try
-                    obj = JSON.parse(data)
-                    if (obj.error)
-                      error(obj.error)
-                    else
-                      console.log(obj.status)
-                  catch (e)
-                    console.log(data)
-                    nil
+              stream.on 'data' @(data)
+                try
+                  obj = JSON.parse(data)
+                  if (obj.error)
+                    error(obj.error)
+                  else
+                    console.log(obj.status)
+                catch (e)
+                  console.log(data)
+                  nil
 
               stream.on ('error', error)
 
