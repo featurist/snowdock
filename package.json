@@ -1,6 +1,6 @@
 {
   "name": "snowdock",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "automation of website deployment with docker",
   "main": "index.js",
   "directories": {
