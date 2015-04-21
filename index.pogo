@@ -757,15 +757,15 @@ sshTunnels =
       tunnels := []
   }
 
-parseImageName(imageName) =
-  match = r/^(.*):([^\/:]*)$|^(.*)$/.exec(imageName)
+parseImageName = exports.parseImageName (imageName) =
+  match = r/^([^\/:]+(:\d+)?\/[^:]+)(:(.*))?$/.exec(imageName)
 
   if (match.4)
     {
       fromImage = match.1
-      tag = match.2
+      tag = match.4
     }
   else
     {
-      fromImage = match.3
+      fromImage = match.1
     }

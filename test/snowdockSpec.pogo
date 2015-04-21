@@ -55,12 +55,12 @@ describe 'snowdock' =>
           port = Number(dockerUrl.port)
         }
 
-    removeAllContainers(command: 'node_modules/.bin/pogo index.pogo')!
-    removeAllContainers(imageName: 'library/hipache')!
+    // removeAllContainers(command: 'node_modules/.bin/pogo index.pogo')!
+    // removeAllContainers(imageName: 'library/hipache')!
 
     config := {
       hosts = {
-        "localhost" = {
+        localhost = {
           docker = dockerConfig
           redis = {
             host = dockerUrl.hostname
@@ -70,7 +70,7 @@ describe 'snowdock' =>
         }
       }
       websites = {
-        "nodeapp" = {
+        nodeapp = {
           nodes = 4
           hostname  = 'nodeapp'
           container = {
@@ -119,8 +119,8 @@ describe 'snowdock' =>
 
   describeApi (api) =
     beforeEach
-      snowdock.host(config.hosts.localhost).image(imageName).remove(force: true)!
-      buildDockerImage (imageName: imageName, dir: 'nodeapp')!
+      // snowdock.host(config.hosts.localhost).image(imageName).remove(force: true)!
+      // buildDockerImage (imageName: imageName, dir: 'nodeapp')!
 
       api.setConfig! (config)!
       api.before()!
@@ -132,11 +132,24 @@ describe 'snowdock' =>
     describe 'status'
       context 'when the proxy, and a website is installed'
         beforeEach
-          api.startProxy()!
-          api.startWebsite('nodeapp')!
+          //api.startProxy()!
+          //api.startWebsite('nodeapp')!
+          nil
 
         it 'reports status'
-          console.log(JSON.stringify(api.status()!, nil, 2))
+          status = api.status()!
+
+          containers = status.0.containers
+          /*
+          [c <- containers, c.websiteHostname].should.eql [
+            'nodeapp'
+            'nodeapp'
+            'nodeapp'
+            'nodeapp'
+          ]
+          */
+
+          console.log(JSON.stringify(status, nil, 2))
 
     it 'starts proxy'
       api.startProxy()!
@@ -330,6 +343,24 @@ describe 'snowdock' =>
           retry!
             httpism.get "http://#(hostname):8000/".should.eventually.be.rejectedWith 'connect ECONNREFUSED'!
             findContainers(command: 'node_modules/.bin/pogo index.pogo')!.length.should.eql 0
+
+  describe 'parseImageName'
+    it 'should parse an image with a port'
+      snowdock.parseImageName 'server:5000/image'.should.eql {
+        fromImage = 'server:5000/image'
+      }
+
+    it 'should parse an image with a port and tag'
+      snowdock.parseImageName 'server:5000/image:tag'.should.eql {
+        fromImage = 'server:5000/image'
+        tag = 'tag'
+      }
+
+    it 'should parse an image with a tag'
+      snowdock.parseImageName 'server/image:tag'.should.eql {
+        fromImage = 'server/image'
+        tag = 'tag'
+      }
 
   describe 'api'
     api =
