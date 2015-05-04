@@ -127,6 +127,10 @@ E.g.
 ### privileged
 Run the container with root privileges, this can be `true`, `false` or `undefined`
 
+### command
+
+The command to run on the container one start. (This is the last argument to the `docker run` command.)
+
 Here is a full example of a website configuration
 
     {

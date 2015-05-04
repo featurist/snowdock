@@ -17,6 +17,7 @@
     "minimist": "^0.2.0",
     "portfinder": "^0.3.0",
     "redis": "^0.12.1",
+    "shell-quote": "1.4.3",
     "shellsubstitute": "^1.1.0",
     "ssh-forward": "^0.3.3",
     "then-redis": "git+https://github.com/featurist/then-redis.git#end",

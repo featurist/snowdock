@@ -6,6 +6,7 @@ sshForward = require 'ssh-forward'
 substitute = require 'shellsubstitute'
 portfinder = require 'portfinder'
 waitForSocket = require 'waitforsocket'
+shellQuote = require 'shell-quote'
 
 connectToDocker(config) =
   log.debug "connecting to docker '#("#(config.protocol @or 'http')://" + config.host):#(config.port)'"
@@ -303,6 +304,7 @@ exports.host (host) =
         name = containerConfig.name
         Env = environmentVariables(containerConfig.env)
         ExposedPorts = portBindings(containerConfig.publish, create = true)
+        Cmd = parseCommand(containerConfig.command)
 
         HostConfig = {
           Binds = containerConfig.volumes
@@ -661,6 +663,12 @@ portBindings (ports, create: false) =
           [{HostPort = binding.hostPort, HostIp = binding.hostIp}]
 
     bindings
+
+parseCommand (command) =
+  if (command :: Array)
+    command
+  else
+    shellQuote.parse(command)
 
 portBinding (port) =
   match = r/((([0-9.]*):)?(\d+):)?(\d+)/.exec(port)
