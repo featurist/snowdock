@@ -304,7 +304,9 @@ exports.host (host) =
         name = containerConfig.name
         Env = environmentVariables(containerConfig.env)
         ExposedPorts = portBindings(containerConfig.publish, create = true)
-        Cmd = parseCommand(containerConfig.command)
+        Cmd =
+          if (containerConfig)
+            parseCommand(containerConfig.command)
 
         HostConfig = {
           Binds = containerConfig.volumes
