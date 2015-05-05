@@ -305,7 +305,7 @@ exports.host (host) =
         Env = environmentVariables(containerConfig.env)
         ExposedPorts = portBindings(containerConfig.publish, create = true)
         Cmd =
-          if (containerConfig)
+          if (containerConfig.command)
             parseCommand(containerConfig.command)
 
         HostConfig = {
